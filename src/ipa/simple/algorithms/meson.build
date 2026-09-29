@@ -7,4 +7,5 @@ soft_simple_ipa_algorithms = files([
     'blc.cpp',
     'ccm.cpp',
 	'lens_shading.cpp',
+	'noise_reduction.cpp',
 ])

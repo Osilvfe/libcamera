@@ -69,6 +69,14 @@ struct IPAActiveState {
 		bool enabled;
 	} lensShading;
 
+	struct {
+		float noiseReduction;
+		float sharpness;
+		float manualSharpness;
+		int32_t mode;
+		bool manualSharpnessEnabled;
+	} detail;
+
 	Matrix<float, 3, 3> combinedMatrix;
 
 	struct {
@@ -102,6 +110,9 @@ struct IPAFrameContext : public FrameContext {
 	std::optional<float> contrast;
 	std::optional<float> saturation;
 	bool lensShadingEnabled;
+	float noiseReduction;
+	float sharpness;
+	int32_t noiseReductionMode;
 };
 
 struct IPAContext {

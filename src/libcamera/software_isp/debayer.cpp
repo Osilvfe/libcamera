@@ -44,6 +44,16 @@ namespace libcamera {
  */
 
 /**
+ * \var DebayerParams::noiseReduction
+ * \brief Strength of the edge-aware noise reduction filter
+ */
+
+/**
+ * \var DebayerParams::sharpness
+ * \brief Strength of the output sharpening filter
+ */
+
+/**
  * \class Debayer
  * \brief Base debayering class
  *

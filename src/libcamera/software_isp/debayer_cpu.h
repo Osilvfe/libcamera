@@ -126,6 +126,7 @@ private:
 	int setDebayerFunctions(PixelFormat inputFormat,
 				PixelFormat outputFormat,
 				bool ccmEnabled);
+	void applyPostProcessing(uint8_t *output, const DebayerParams &params);
 	void updateGammaTable(const DebayerParams &params);
 	void updateLookupTables(const DebayerParams &params);
 
@@ -146,6 +147,7 @@ private:
 	CcmLookupTable blueCcm_;
 	std::array<double, kGammaLookupSize> gammaTable_;
 	LookupTable gammaLut_;
+	std::array<std::vector<uint8_t>, 3> postProcessRows_;
 	bool ccmEnabled_;
 	DebayerParams params_;
 

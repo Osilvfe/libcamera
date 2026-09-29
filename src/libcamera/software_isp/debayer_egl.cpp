@@ -288,6 +288,44 @@ int DebayerEGL::initBayerShaders(PixelFormat inputFormat, PixelFormat outputForm
 	return getShaderVariableLocations();
 }
 
+int DebayerEGL::initPostProcessShaders()
+{
+	std::vector<std::string> shaderEnv;
+	egl_.pushEnv(shaderEnv, "#version 100");
+
+	if (egl_.compileVertexShader(postVertexShaderId_, identity_vert,
+				     shaderEnv)) {
+		LOG(Debayer, Error) << "Compile post-process vertex shader fail";
+		return -ENODEV;
+	}
+	utils::scope_exit vertexGuard([&] { glDeleteShader(postVertexShaderId_); });
+
+	if (egl_.compileFragmentShader(postFragmentShaderId_,
+				       camera_post_process_frag, shaderEnv)) {
+		LOG(Debayer, Error) << "Compile post-process fragment shader fail";
+		return -ENODEV;
+	}
+	utils::scope_exit fragmentGuard([&] { glDeleteShader(postFragmentShaderId_); });
+
+	if (egl_.linkProgram(postProgramId_, postVertexShaderId_,
+			     postFragmentShaderId_)) {
+		LOG(Debayer, Error) << "Linking post-process program fail";
+		return -ENODEV;
+	}
+
+	postAttributeVertex_ = glGetAttribLocation(postProgramId_, "vertexIn");
+	postAttributeTexture_ = glGetAttribLocation(postProgramId_, "textureIn");
+	postTextureUniform_ = glGetUniformLocation(postProgramId_, "source");
+	postTexelStepUniform_ = glGetUniformLocation(postProgramId_, "texel_step");
+	postNoiseReductionUniform_ =
+		glGetUniformLocation(postProgramId_, "noise_reduction");
+	postSharpnessUniform_ = glGetUniformLocation(postProgramId_, "sharpness");
+	postStrideUniform_ = glGetUniformLocation(postProgramId_, "stride_factor");
+	postProjectionUniform_ = glGetUniformLocation(postProgramId_, "proj_matrix");
+
+	return 0;
+}
+
 int DebayerEGL::configure(const StreamConfiguration &inputCfg,
 			  const std::vector<std::reference_wrapper<const StreamConfiguration>> &outputCfgs,
 			  [[maybe_unused]] bool ccmEnabled)
@@ -398,6 +436,8 @@ uint32_t DebayerEGL::preferredInputStride(const PixelFormat &inputFormat, const 
 
 void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerParams &params)
 {
+	egl_.useProgram(programId_);
+
 	/*
 	 * Raw Bayer 8-bit, and packed raw Bayer 10-bit/12-bit formats
 	 * are stored in a GL_LUMINANCE texture. The texture width is
@@ -531,6 +571,46 @@ void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerPara
 	return;
 }
 
+void DebayerEGL::applyPostProcessing(eGLImage &source,
+				     const DebayerParams &params)
+{
+	static const GLfloat vertices[4][2] = {
+		{ -1.0f, -1.0f },
+		{ -1.0f, 1.0f },
+		{ 1.0f, 1.0f },
+		{ 1.0f, -1.0f },
+	};
+	static const GLfloat textureCoordinates[4][2] = {
+		{ 0.0f, 0.0f },
+		{ 0.0f, 1.0f },
+		{ 1.0f, 1.0f },
+		{ 1.0f, 0.0f },
+	};
+	static const GLfloat projection[16] = {
+		1.0f, 0.0f, 0.0f, 0.0f,
+		0.0f, 1.0f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.0f, 0.0f, 0.0f, 1.0f,
+	};
+
+	egl_.useProgram(postProgramId_);
+	egl_.activateBindTexture(source);
+	glUniform1i(postTextureUniform_, source.texture_unit_uniform_id_);
+	glUniform2f(postTexelStepUniform_, 1.0f / outputSize_.width,
+		    1.0f / outputSize_.height);
+	glUniform1f(postNoiseReductionUniform_, params.noiseReduction);
+	glUniform1f(postSharpnessUniform_, params.sharpness);
+	glUniform1f(postStrideUniform_, 1.0f);
+	glUniformMatrix4fv(postProjectionUniform_, 1, GL_FALSE, projection);
+
+	glEnableVertexAttribArray(postAttributeVertex_);
+	glVertexAttribPointer(postAttributeVertex_, 2, GL_FLOAT, GL_FALSE,
+			      2 * sizeof(GLfloat), vertices);
+	glEnableVertexAttribArray(postAttributeTexture_);
+	glVertexAttribPointer(postAttributeTexture_, 2, GL_FLOAT, GL_FALSE,
+			      2 * sizeof(GLfloat), textureCoordinates);
+}
+
 eGLImage *DebayerEGL::getCachedInputFrameBuffer(FrameBuffer *input, std::optional<MappedFrameBuffer> *inMapped, std::optional<DmaSyncer> *inDmaSyncer)
 {
 	const SharedFD &fd = input->planes()[0].fd;
@@ -628,12 +708,23 @@ int DebayerEGL::debayerGPU(FrameBuffer *input, FrameBuffer *output, const Debaye
 	if (!eglImageOut)
 		return -ENOMEM;
 
-	egl_.attachTextureToFBO(*eglImageOut);
+	eGLImage *firstPassOutput = postProcessingAvailable_
+					? postProcessImage_.get()
+					: eglImageOut;
+	egl_.attachTextureToFBO(*firstPassOutput);
 	setShaderVariableValues(*eglImageIn, params);
 
 	glViewport(0, 0, width_, height_);
 	glClear(GL_COLOR_BUFFER_BIT);
 	glDrawArrays(GL_TRIANGLE_FAN, 0, DEBAYER_OPENGL_COORDS);
+
+	if (postProcessingAvailable_) {
+		egl_.attachTextureToFBO(*eglImageOut);
+		applyPostProcessing(*postProcessImage_, params);
+		glViewport(0, 0, outputSize_.width, outputSize_.height);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glDrawArrays(GL_TRIANGLE_FAN, 0, DEBAYER_OPENGL_COORDS);
+	}
 
 	GLenum err = glGetError();
 	if (err != GL_NO_ERROR) {
@@ -712,6 +803,27 @@ int DebayerEGL::start()
 	if (initBayerShaders(inputPixelFormat_, outputPixelFormat_))
 		return -EINVAL;
 
+	postProcessingAvailable_ = maxTextureImageUnits >= 4;
+	if (postProcessingAvailable_ && initPostProcessShaders()) {
+		LOG(Debayer, Warning)
+			<< "Post-processing shader unavailable; continuing without it";
+		postProcessingAvailable_ = false;
+	}
+
+	if (postProcessingAvailable_) {
+		postProcessImage_ = std::make_unique<eGLImage>(
+			GL_RGBA, outputSize_.width, outputSize_.height,
+			outputSize_.width * 4, GL_TEXTURE3, 3);
+		egl_.createOutputTexture2D(*postProcessImage_);
+		GLenum err = glGetError();
+		if (err != GL_NO_ERROR) {
+			LOG(Debayer, Warning)
+				<< "Post-processing texture unavailable: " << err;
+			postProcessImage_.reset();
+			postProcessingAvailable_ = false;
+		}
+	}
+
 	if (maxTextureImageUnits >= 3) {
 		std::array<float, DebayerParams::kLensShadingSize> unity;
 		unity.fill(1.0f);
@@ -745,16 +857,20 @@ int DebayerEGL::start()
 
 void DebayerEGL::stop()
 {
+	postProcessImage_.reset();
 	eglImageOutCache_.clear();
 	eglImageInCache_.clear();
 
 	if (programId_)
 		glDeleteProgram(programId_);
+	if (postProgramId_)
+		glDeleteProgram(postProgramId_);
 	if (lensShadingTexture_) {
 		glDeleteTextures(1, &lensShadingTexture_);
 		lensShadingTexture_ = 0;
 	}
 	lensShadingAvailable_ = false;
+	postProcessingAvailable_ = false;
 }
 
 SizeRange DebayerEGL::sizes(PixelFormat inputFormat, const Size &inputSize)

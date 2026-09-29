@@ -6,6 +6,7 @@ shader_files = files([
     'bayer_1x_packed.frag',
     'bayer_unpacked.frag',
     'bayer_unpacked.vert',
+	'camera_post_process.frag',
     'identity.vert',
 ])
 

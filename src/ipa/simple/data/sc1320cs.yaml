@@ -619,6 +619,16 @@ algorithms:
           ccm: [ 1.6752, -0.4268, -0.2484,
                  -0.0780, 1.3636, -0.2856,
                   0.1460, -0.7536, 1.6076 ]
+  - NoiseReduction:
+      sharpness: 1.0
+      lowLightSharpness: 0.45
+      denoise: 0.08
+      lowLightDenoise: 0.55
+      gainStart: 2.0
+      gainEnd: 10.0
+      exposureStartMs: 15.0
+      exposureEndMs: 80.0
+      smoothing: 0.15
   - Adjust:
       contrast: 1.1
       autoContrast:

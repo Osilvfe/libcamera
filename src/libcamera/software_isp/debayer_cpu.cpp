@@ -12,6 +12,7 @@
 #include "debayer_cpu.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <utility>
@@ -669,6 +670,9 @@ int DebayerCpu::configure(const StreamConfiguration &inputCfg,
 
 	const StreamConfiguration &outputCfg = outputCfgs[0];
 	SizeRange outSizeRange = sizes(inputCfg.pixelFormat, inputCfg.size);
+	if (getOutputConfig(outputCfg.pixelFormat, outputConfig_) != 0)
+		return -EINVAL;
+
 	std::tie(outputConfig_.stride, outputConfig_.frameSize) =
 		strideAndFrameSize(outputCfg.pixelFormat, outputCfg.size);
 
@@ -687,6 +691,10 @@ int DebayerCpu::configure(const StreamConfiguration &inputCfg,
 		return -EINVAL;
 
 	ccmEnabled_ = ccmEnabled;
+	outputPixelFormat_ = outputCfg.pixelFormat;
+	outputSize_ = outputCfg.size;
+	for (auto &row : postProcessRows_)
+		row.resize(outputConfig_.stride);
 
 	/*
 	 * Lookup tables must be initialized because the initial value is used for
@@ -1065,6 +1073,75 @@ void DebayerCpu::updateLookupTables(const DebayerParams &params)
 	params_ = params;
 }
 
+void DebayerCpu::applyPostProcessing(uint8_t *output,
+				     const DebayerParams &params)
+{
+	const float noiseReduction = std::clamp(params.noiseReduction, 0.0f, 1.0f);
+	const float sharpness = std::clamp(params.sharpness, 0.0f, 2.0f);
+	if (noiseReduction == 0.0f && sharpness == 0.0f)
+		return;
+
+	const unsigned int width = outputSize_.width;
+	const unsigned int height = outputSize_.height;
+	const unsigned int stride = outputConfig_.stride;
+	const unsigned int bytesPerPixel = outputConfig_.bpp / 8;
+	auto &previous = postProcessRows_[0];
+	auto &current = postProcessRows_[1];
+	auto &next = postProcessRows_[2];
+
+	std::copy_n(output, stride, current.begin());
+	previous = current;
+	if (height > 1)
+		std::copy_n(output + stride, stride, next.begin());
+	else
+		next = current;
+
+	for (unsigned int y = 0; y < height; ++y) {
+		uint8_t *destination = output + y * stride;
+
+		for (unsigned int x = 0; x < width; ++x) {
+			const unsigned int offset = x * bytesPerPixel;
+			const unsigned int westOffset = x ? offset - bytesPerPixel : offset;
+			const unsigned int eastOffset = x + 1 < width
+							? offset + bytesPerPixel : offset;
+			float blurred[3];
+			float difference = 0.0f;
+
+			for (unsigned int channel = 0; channel < 3; ++channel) {
+				const float center = current[offset + channel];
+				blurred[channel] =
+					(4.0f * center + previous[offset + channel] +
+					 next[offset + channel] + current[westOffset + channel] +
+					 current[eastOffset + channel]) /
+					8.0f;
+				difference = std::max(difference,
+						      std::abs(center - blurred[channel]) / 255.0f);
+			}
+
+			const float edge = std::clamp((difference - 0.015f) / 0.085f,
+						      0.0f, 1.0f);
+			const float flatWeight = 1.0f - edge * edge * (3.0f - 2.0f * edge);
+			const float denoise = noiseReduction * flatWeight;
+
+			for (unsigned int channel = 0; channel < 3; ++channel) {
+				const float center = current[offset + channel];
+				const float denoised = center + denoise * (blurred[channel] - center);
+				const float result = denoised +
+					(denoised - blurred[channel]) * 0.35f * sharpness;
+				destination[offset + channel] = std::clamp(
+					static_cast<int>(result + 0.5f), 0, 255);
+			}
+		}
+
+		previous.swap(current);
+		current.swap(next);
+		if (y + 2 < height)
+			std::copy_n(output + (y + 2) * stride, stride, next.begin());
+		else
+			next = current;
+	}
+}
+
 void DebayerCpu::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output, const DebayerParams &params)
 {
 	bench_.startFrame();
@@ -1106,6 +1183,8 @@ void DebayerCpu::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output
 			return workPending_ == 0;
 		});
 	}
+
+	applyPostProcessing(out.planes()[0].data(), params);
 
 	metadata.planes()[0].bytesused = out.planes()[0].size();
 

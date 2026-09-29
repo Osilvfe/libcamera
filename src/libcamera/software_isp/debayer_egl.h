@@ -65,8 +65,10 @@ private:
 	static int getInputConfig(PixelFormat inputFormat, DebayerInputConfig &config);
 	static int getOutputConfig(PixelFormat outputFormat, DebayerOutputConfig &config);
 	int initBayerShaders(PixelFormat inputFormat, PixelFormat outputFormat);
+	int initPostProcessShaders();
 	int getShaderVariableLocations();
 	void setShaderVariableValues(eGLImage &eGLImageIn, const DebayerParams &params);
+	void applyPostProcessing(eGLImage &source, const DebayerParams &params);
 	int debayerGPU(FrameBuffer *input, FrameBuffer *output, const DebayerParams &params, std::optional<MappedFrameBuffer> *mappedInputBuffer, std::optional<DmaSyncer> *inputBufferDmaSyncer);
 
 	eGLImage *getCachedInputFrameBuffer(FrameBuffer *input, std::optional<MappedFrameBuffer> *inMapped, std::optional<DmaSyncer> *inDmaSyncer);
@@ -76,6 +78,11 @@ private:
 	GLuint vertexShaderId_ = 0;
 	GLuint fragmentShaderId_ = 0;
 	GLuint programId_ = 0;
+	GLuint postVertexShaderId_ = 0;
+	GLuint postFragmentShaderId_ = 0;
+	GLuint postProgramId_ = 0;
+	std::unique_ptr<eGLImage> postProcessImage_;
+	bool postProcessingAvailable_ = false;
 
 	/* Pointer to object representing input texture */
 	std::deque<std::pair<SharedFD, std::unique_ptr<eGLImage>>> eglImageInCache_;
@@ -114,6 +121,16 @@ private:
 
 	/* Contrast */
 	GLint contrastExpUniformDataIn_;
+
+	/* Post-processing pass */
+	GLint postAttributeVertex_;
+	GLint postAttributeTexture_;
+	GLint postTextureUniform_;
+	GLint postTexelStepUniform_;
+	GLint postNoiseReductionUniform_;
+	GLint postSharpnessUniform_;
+	GLint postStrideUniform_;
+	GLint postProjectionUniform_;
 
 	Size nativeOutputSize_;
 	Rectangle window_;
