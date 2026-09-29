@@ -8,6 +8,8 @@
 
 #include "adjust.h"
 
+#include <errno.h>
+
 #include <libcamera/base/log.h>
 #include <libcamera/base/utils.h>
 
@@ -24,24 +26,41 @@ constexpr float kDefaultSaturation = 1.0f;
 
 LOG_DEFINE_CATEGORY(IPASoftAdjust)
 
-int Adjust::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
+Adjust::Adjust()
+	: defaultGamma_(kDefaultGamma)
 {
+}
+
+int Adjust::init(IPAContext &context, const ValueNode &tuningData)
+{
+	defaultGamma_ = tuningData["gamma"].get<float>(kDefaultGamma);
+	defaultContrast_ = tuningData["contrast"].get<float>();
+	defaultSaturation_ = tuningData["saturation"].get<float>();
+
+	if (defaultGamma_ < 0.1f || defaultGamma_ > 10.0f ||
+	    (defaultContrast_ && (*defaultContrast_ < 0.0f || *defaultContrast_ > 2.0f)) ||
+	    (defaultSaturation_ && (*defaultSaturation_ < 0.0f || *defaultSaturation_ > 2.0f))) {
+		LOG(IPASoftAdjust, Error) << "Invalid default image adjustment";
+		return -EINVAL;
+	}
+
 	context.ctrlMap[&controls::Gamma] =
-		ControlInfo(0.1f, 10.0f, kDefaultGamma);
+		ControlInfo(0.1f, 10.0f, defaultGamma_);
 	context.ctrlMap[&controls::Contrast] =
-		ControlInfo(0.0f, 2.0f, kDefaultContrast);
+		ControlInfo(0.0f, 2.0f, defaultContrast_.value_or(kDefaultContrast));
 	if (context.ccmEnabled)
 		context.ctrlMap[&controls::Saturation] =
-			ControlInfo(0.0f, 2.0f, kDefaultSaturation);
+			ControlInfo(0.0f, 2.0f,
+				    defaultSaturation_.value_or(kDefaultSaturation));
 	return 0;
 }
 
 int Adjust::configure(IPAContext &context,
 		      [[maybe_unused]] const IPAConfigInfo &configInfo)
 {
-	context.activeState.knobs.gamma = kDefaultGamma;
-	context.activeState.knobs.contrast = std::optional<float>();
-	context.activeState.knobs.saturation = std::optional<float>();
+	context.activeState.knobs.gamma = defaultGamma_;
+	context.activeState.knobs.contrast = defaultContrast_;
+	context.activeState.knobs.saturation = defaultSaturation_;
 
 	return 0;
 }

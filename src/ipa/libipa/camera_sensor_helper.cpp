@@ -827,6 +827,28 @@ public:
 };
 REGISTER_CAMERA_SENSOR_HELPER("ov13858", CameraSensorHelperOv13858)
 
+class CameraSensorHelperSmartSensQ10 : public CameraSensorHelper
+{
+public:
+	CameraSensorHelperSmartSensQ10()
+	{
+		/* Both Caihong sensors use a 64-code pedestal at 10 bits. */
+		blackLevel_ = 4096;
+		/* The V4L2 controls expose real analogue gain in Q10 format. */
+		gain_ = AnalogueGainLinear{ 1, 0, 0, 1024 };
+	}
+};
+
+class CameraSensorHelperSc1320cs : public CameraSensorHelperSmartSensQ10
+{
+};
+REGISTER_CAMERA_SENSOR_HELPER("sc1320cs", CameraSensorHelperSc1320cs)
+
+class CameraSensorHelperSc820cs : public CameraSensorHelperSmartSensQ10
+{
+};
+REGISTER_CAMERA_SENSOR_HELPER("sc820cs", CameraSensorHelperSc820cs)
+
 class CameraSensorHelperVd55g1 : public CameraSensorHelper
 {
 public:

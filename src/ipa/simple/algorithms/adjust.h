@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "libcamera/internal/matrix.h"
 
 #include <libipa/interpolator.h>
@@ -22,7 +24,7 @@ constexpr float kDefaultGamma = 2.2f;
 class Adjust : public Algorithm
 {
 public:
-	Adjust() = default;
+	Adjust();
 	~Adjust() = default;
 
 	int init(IPAContext &context, const ValueNode &tuningData) override;
@@ -43,6 +45,10 @@ public:
 
 private:
 	void applySaturation(Matrix<float, 3, 3> &ccm, float saturation);
+
+	float defaultGamma_;
+	std::optional<float> defaultContrast_;
+	std::optional<float> defaultSaturation_;
 };
 
 } /* namespace ipa::soft::algorithms */

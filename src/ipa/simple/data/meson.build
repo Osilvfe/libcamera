@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: CC0-1.0
 
 conf_files = files([
+    'sc1320cs.yaml',
+    'sc820cs.yaml',
     'uncalibrated.yaml',
 ])
 
