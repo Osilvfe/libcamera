@@ -39,6 +39,12 @@ struct IPAActiveState {
 	struct {
 		int32_t exposure;
 		double again;
+		int32_t manualExposure;
+		double manualGain;
+		float exposureValue;
+		bool autoExposure;
+		bool autoGain;
+		unsigned int stableFrames;
 		bool valid;
 	} agc;
 
@@ -50,7 +56,13 @@ struct IPAActiveState {
 
 	struct {
 		RGB<float> gains;
+		RGB<float> manualGains;
 		unsigned int temperatureK;
+		unsigned int manualTemperatureK;
+		int32_t mode;
+		unsigned int stableFrames;
+		bool autoEnabled;
+		bool locked;
 	} awb;
 
 	struct {
@@ -73,9 +85,18 @@ struct IPAFrameContext : public FrameContext {
 	struct {
 		int32_t exposure;
 		double gain;
+		int32_t manualExposure;
+		double manualGain;
+		float exposureValue;
+		bool autoExposure;
+		bool autoGain;
 	} sensor;
 
 	RGB<float> gains;
+	unsigned int colourTemperatureK;
+	int32_t awbMode;
+	bool awbAutoEnabled;
+	bool awbLocked;
 
 	float gamma;
 	std::optional<float> contrast;

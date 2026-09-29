@@ -7,6 +7,10 @@
 
 #pragma once
 
+#include "libcamera/internal/vector.h"
+
+#include <libipa/interpolator.h>
+
 #include "algorithm.h"
 
 namespace libcamera {
@@ -19,7 +23,12 @@ public:
 	Awb() = default;
 	~Awb() = default;
 
+	int init(IPAContext &context, const ValueNode &tuningData) override;
 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
+	void queueRequest(IPAContext &context,
+			  const uint32_t frame,
+			  IPAFrameContext &frameContext,
+			  const ControlList &controls) override;
 	void prepare(IPAContext &context,
 		     const uint32_t frame,
 		     IPAFrameContext &frameContext,
@@ -29,6 +38,13 @@ public:
 		     IPAFrameContext &frameContext,
 		     const SwIspStats *stats,
 		     ControlList &metadata) override;
+
+private:
+	std::optional<RGB<float>> gainsFromTemperature(unsigned int temperatureK);
+	unsigned int modeTemperature(int32_t mode) const;
+
+	Interpolator<Vector<double, 2>> colourGains_;
+	float smoothing_ = 0.18f;
 };
 
 } /* namespace ipa::soft::algorithms */

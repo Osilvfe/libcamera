@@ -6,6 +6,18 @@ algorithms:
   - BlackLevel:
       blackLevel: 4096
   - Awb:
+      smoothing: 0.18
+      colourGains:
+        - ct: 2800
+          gains: [ 1.45, 3.20 ]
+        - ct: 4000
+          gains: [ 1.90, 2.25 ]
+        - ct: 5400
+          gains: [ 2.47, 1.71 ]
+        - ct: 6500
+          gains: [ 2.90, 1.45 ]
+        - ct: 7500
+          gains: [ 3.20, 1.30 ]
   - LensShading:
       enabled: true
       smoothing: 0.15

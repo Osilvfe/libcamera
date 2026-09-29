@@ -179,9 +179,6 @@ int IPASoftSimple::init(const IPASettings &settings,
 		stats_ = static_cast<SwIspStats *>(mem);
 	}
 
-	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
-	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
-
 	/*
 	 * Check if the sensor driver supports the controls required by the
 	 * Soft IPA.
@@ -197,6 +194,30 @@ int IPASoftSimple::init(const IPASettings &settings,
 		LOG(IPASoft, Error) << "Don't have gain control";
 		return -EINVAL;
 	}
+
+	const ControlInfo &exposureInfo =
+		sensorControls.find(V4L2_CID_EXPOSURE)->second;
+	const ControlInfo &gainInfo =
+		sensorControls.find(V4L2_CID_ANALOGUE_GAIN)->second;
+	const utils::Duration lineDuration =
+		sensorInfo.minLineLength * 1.0s / sensorInfo.pixelRate;
+	const auto exposureTime = [&lineDuration](const ControlValue &value) {
+		return static_cast<int32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+			lineDuration * value.get<int32_t>()).count());
+	};
+	context_.ctrlMap[&controls::ExposureTime] = ControlInfo(
+		exposureTime(exposureInfo.min()), exposureTime(exposureInfo.max()),
+		exposureTime(exposureInfo.def()));
+	context_.ctrlMap[&controls::AnalogueGain] = ControlInfo(
+		static_cast<float>(camHelper_ ? camHelper_->gain(gainInfo.min().get<int32_t>())
+					      : gainInfo.min().get<int32_t>()),
+		static_cast<float>(camHelper_ ? camHelper_->gain(gainInfo.max().get<int32_t>())
+					      : gainInfo.max().get<int32_t>()),
+		static_cast<float>(camHelper_ ? camHelper_->gain(gainInfo.def().get<int32_t>())
+					      : gainInfo.def().get<int32_t>()));
+
+	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
+	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
 
 	return 0;
 }
