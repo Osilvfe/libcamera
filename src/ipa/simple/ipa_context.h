@@ -53,6 +53,10 @@ struct IPAActiveState {
 		unsigned int temperatureK;
 	} awb;
 
+	struct {
+		bool enabled;
+	} lensShading;
+
 	Matrix<float, 3, 3> combinedMatrix;
 
 	struct {
@@ -76,6 +80,7 @@ struct IPAFrameContext : public FrameContext {
 	float gamma;
 	std::optional<float> contrast;
 	std::optional<float> saturation;
+	bool lensShadingEnabled;
 };
 
 struct IPAContext {

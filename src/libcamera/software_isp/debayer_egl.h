@@ -95,6 +95,10 @@ private:
 	GLint textureUniformProjMatrix_;
 
 	GLint textureUniformBayerDataIn_;
+	GLint lensShadingUniformDataIn_;
+	GLint lensShadingEnabledUniform_;
+	GLuint lensShadingTexture_ = 0;
+	bool lensShadingAvailable_ = false;
 
 	/* Per-frame AWB gains */
 	GLint awbUniformDataIn_;

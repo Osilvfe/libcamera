@@ -163,6 +163,8 @@ int IPASoftSimple::init(const IPASettings &settings,
 		params_->gamma = 1.0 / algorithms::kDefaultGamma;
 		params_->contrastExp = 1.0;
 		params_->gains = { { 1.0, 1.0, 1.0 } };
+		params_->lensShading.fill(1.0f);
+		params_->lensShadingEnabled = false;
 		/* combinedMatrix is reset for each frame. */
 	}
 

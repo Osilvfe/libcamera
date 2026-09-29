@@ -116,6 +116,8 @@ int DebayerEGL::getShaderVariableLocations(void)
 	attributeTexture_ = glGetAttribLocation(programId_, "textureIn");
 
 	textureUniformBayerDataIn_ = glGetUniformLocation(programId_, "tex_y");
+	lensShadingUniformDataIn_ = glGetUniformLocation(programId_, "lens_shading");
+	lensShadingEnabledUniform_ = glGetUniformLocation(programId_, "lens_shading_enabled");
 	awbUniformDataIn_ = glGetUniformLocation(programId_, "awb");
 	ccmUniformDataIn_ = glGetUniformLocation(programId_, "ccm");
 	blackLevelUniformDataIn_ = glGetUniformLocation(programId_, "blacklevel");
@@ -130,6 +132,8 @@ int DebayerEGL::getShaderVariableLocations(void)
 
 	LOG(Debayer, Debug) << "vertexIn " << attributeVertex_ << " textureIn " << attributeTexture_
 			    << " tex_y " << textureUniformBayerDataIn_
+			    << " lens_shading " << lensShadingUniformDataIn_
+			    << " lens_shading_enabled " << lensShadingEnabledUniform_
 			    << " awb " << awbUniformDataIn_
 			    << " ccm " << ccmUniformDataIn_
 			    << " blacklevel " << blackLevelUniformDataIn_
@@ -449,6 +453,25 @@ void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerPara
 	 * texture units
 	 */
 	glUniform1i(textureUniformBayerDataIn_, eglImageIn.texture_unit_uniform_id_);
+	glUniform1i(lensShadingUniformDataIn_, 2);
+
+	bool lensShadingEnabled = params.lensShadingEnabled && lensShadingAvailable_;
+	if (lensShadingEnabled) {
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, lensShadingTexture_);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+				DebayerParams::kLensShadingWidth,
+				DebayerParams::kLensShadingHeight,
+				GL_RGBA, GL_FLOAT, params.lensShading.data());
+		GLenum err = glGetError();
+		if (err != GL_NO_ERROR) {
+			LOG(Debayer, Error)
+				<< "Lens shading texture update failed: " << err;
+			lensShadingAvailable_ = false;
+			lensShadingEnabled = false;
+		}
+	}
+	glUniform1i(lensShadingEnabledUniform_, lensShadingEnabled);
 
 	/*
 	 * These values are:
@@ -689,6 +712,34 @@ int DebayerEGL::start()
 	if (initBayerShaders(inputPixelFormat_, outputPixelFormat_))
 		return -EINVAL;
 
+	if (maxTextureImageUnits >= 3) {
+		std::array<float, DebayerParams::kLensShadingSize> unity;
+		unity.fill(1.0f);
+		glGenTextures(1, &lensShadingTexture_);
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, lensShadingTexture_);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+			     DebayerParams::kLensShadingWidth,
+			     DebayerParams::kLensShadingHeight, 0,
+			     GL_RGBA, GL_FLOAT, unity.data());
+		GLenum err = glGetError();
+		if (err == GL_NO_ERROR) {
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			lensShadingAvailable_ = true;
+		} else {
+			LOG(Debayer, Warning)
+				<< "Floating-point lens shading textures unavailable: " << err;
+			glDeleteTextures(1, &lensShadingTexture_);
+			lensShadingTexture_ = 0;
+		}
+	} else {
+		LOG(Debayer, Warning)
+			<< "Lens shading needs three fragment shader texture units";
+	}
+
 	return 0;
 }
 
@@ -699,6 +750,11 @@ void DebayerEGL::stop()
 
 	if (programId_)
 		glDeleteProgram(programId_);
+	if (lensShadingTexture_) {
+		glDeleteTextures(1, &lensShadingTexture_);
+		lensShadingTexture_ = 0;
+	}
+	lensShadingAvailable_ = false;
 }
 
 SizeRange DebayerEGL::sizes(PixelFormat inputFormat, const Size &inputSize)

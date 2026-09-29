@@ -29,6 +29,27 @@ uniform mat3            ccm;
 uniform vec3            blacklevel;
 uniform float           gamma;
 uniform float           contrastExp;
+uniform vec2            tex_size;
+uniform vec2            tex_bayer_first_red;
+uniform sampler2D       lens_shading;
+uniform bool            lens_shading_enabled;
+
+vec4 sample_lens_shading(vec2 coord)
+{
+    const vec2 size = vec2(17.0, 13.0);
+    vec2 position = clamp(coord, 0.0, 1.0) * (size - 1.0);
+    vec2 base = floor(position);
+    vec2 fraction = fract(position);
+    vec2 uv00 = (base + 0.5) / size;
+    vec2 uv10 = (base + vec2(1.5, 0.5)) / size;
+    vec2 uv01 = (base + vec2(0.5, 1.5)) / size;
+    vec2 uv11 = (base + 1.5) / size;
+    vec4 top = mix(texture2D(lens_shading, uv00),
+                   texture2D(lens_shading, uv10), fraction.x);
+    vec4 bottom = mix(texture2D(lens_shading, uv01),
+                      texture2D(lens_shading, uv11), fraction.x);
+    return mix(top, bottom, fraction.y);
+}
 
 float apply_contrast(float value)
 {
@@ -134,6 +155,11 @@ void main(void) {
      * reworked into a single multiplication.
      */
     rgb = (rgb - blacklevel) / (1.0 - blacklevel);
+    if (lens_shading_enabled) {
+        vec2 sensorCoord = (center.zw - tex_bayer_first_red) / (tex_size - 1.0);
+        vec4 shading = sample_lens_shading(sensorCoord);
+        rgb *= vec3(shading.r, (shading.g + shading.b) * 0.5, shading.a);
+    }
 
     /* Apply AWB gains, and saturate each channel at sensor range */
     rgb = clamp(rgb * awb, vec3(0.0), vec3(1.0));
