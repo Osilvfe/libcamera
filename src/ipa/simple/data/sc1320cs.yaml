@@ -609,5 +609,14 @@ algorithms:
                   0.1460, -0.7536, 1.6076 ]
   - Adjust:
       contrast: 1.1
+      autoContrast:
+        enabled: true
+        min: 0.95
+        max: 1.18
+        targetRange: 0.45
+        rangeGain: 0.4
+        lowLightStartMs: 20.0
+        lowLightEndMs: 120.0
+        smoothing: 0.12
   - Agc:
 ...

@@ -49,6 +49,16 @@ private:
 	float defaultGamma_;
 	std::optional<float> defaultContrast_;
 	std::optional<float> defaultSaturation_;
+	bool autoContrastEnabled_ = false;
+	bool manualContrast_ = false;
+	float autoContrastMin_ = 0.95f;
+	float autoContrastMax_ = 1.18f;
+	float autoContrastTargetRange_ = 0.45f;
+	float autoContrastRangeGain_ = 0.4f;
+	float autoContrastLowLightStartMs_ = 20.0f;
+	float autoContrastLowLightEndMs_ = 120.0f;
+	float autoContrastSmoothing_ = 0.12f;
+	float currentAutoContrast_ = 1.0f;
 };
 
 } /* namespace ipa::soft::algorithms */

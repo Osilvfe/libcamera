@@ -17,6 +17,8 @@
 
 #include "libcamera/internal/matrix.h"
 
+#include <libipa/histogram.h>
+
 namespace libcamera {
 
 namespace ipa::soft::algorithms {
@@ -36,10 +38,28 @@ int Adjust::init(IPAContext &context, const ValueNode &tuningData)
 	defaultGamma_ = tuningData["gamma"].get<float>(kDefaultGamma);
 	defaultContrast_ = tuningData["contrast"].get<float>();
 	defaultSaturation_ = tuningData["saturation"].get<float>();
+	const ValueNode &autoContrast = tuningData["autoContrast"];
+	autoContrastEnabled_ = autoContrast["enabled"].get<bool>(false);
+	autoContrastMin_ = autoContrast["min"].get<float>(0.95f);
+	autoContrastMax_ = autoContrast["max"].get<float>(1.18f);
+	autoContrastTargetRange_ = autoContrast["targetRange"].get<float>(0.45f);
+	autoContrastRangeGain_ = autoContrast["rangeGain"].get<float>(0.4f);
+	autoContrastLowLightStartMs_ =
+		autoContrast["lowLightStartMs"].get<float>(20.0f);
+	autoContrastLowLightEndMs_ =
+		autoContrast["lowLightEndMs"].get<float>(120.0f);
+	autoContrastSmoothing_ = autoContrast["smoothing"].get<float>(0.12f);
 
 	if (defaultGamma_ < 0.1f || defaultGamma_ > 10.0f ||
 	    (defaultContrast_ && (*defaultContrast_ < 0.0f || *defaultContrast_ > 2.0f)) ||
-	    (defaultSaturation_ && (*defaultSaturation_ < 0.0f || *defaultSaturation_ > 2.0f))) {
+	    (defaultSaturation_ && (*defaultSaturation_ < 0.0f || *defaultSaturation_ > 2.0f)) ||
+	    autoContrastMin_ < 0.0f || autoContrastMax_ > 2.0f ||
+	    autoContrastMin_ > autoContrastMax_ ||
+	    autoContrastTargetRange_ < 0.0f || autoContrastTargetRange_ > 1.0f ||
+	    autoContrastRangeGain_ < 0.0f ||
+	    autoContrastLowLightStartMs_ < 0.0f ||
+	    autoContrastLowLightStartMs_ >= autoContrastLowLightEndMs_ ||
+	    autoContrastSmoothing_ <= 0.0f || autoContrastSmoothing_ > 1.0f) {
 		LOG(IPASoftAdjust, Error) << "Invalid default image adjustment";
 		return -EINVAL;
 	}
@@ -61,6 +81,8 @@ int Adjust::configure(IPAContext &context,
 	context.activeState.knobs.gamma = defaultGamma_;
 	context.activeState.knobs.contrast = defaultContrast_;
 	context.activeState.knobs.saturation = defaultSaturation_;
+	currentAutoContrast_ = defaultContrast_.value_or(kDefaultContrast);
+	manualContrast_ = false;
 
 	return 0;
 }
@@ -79,6 +101,7 @@ void Adjust::queueRequest(typename Module::Context &context,
 	const auto &contrast = controls.get(controls::Contrast);
 	if (contrast.has_value()) {
 		context.activeState.knobs.contrast = contrast;
+		manualContrast_ = true;
 		LOG(IPASoftAdjust, Debug) << "Setting contrast to " << contrast.value();
 	}
 
@@ -133,9 +156,41 @@ void Adjust::prepare(IPAContext &context,
 void Adjust::process([[maybe_unused]] IPAContext &context,
 		     [[maybe_unused]] const uint32_t frame,
 		     IPAFrameContext &frameContext,
-		     [[maybe_unused]] const SwIspStats *stats,
+		     const SwIspStats *stats,
 		     ControlList &metadata)
 {
+	if (autoContrastEnabled_ && !manualContrast_ && stats->valid &&
+	    context.activeState.agc.valid) {
+		const ipa::Histogram histogram(stats->yHistogram);
+		if (histogram.total()) {
+			const float low = histogram.quantile(0.05) / SwIspStats::kYHistogramSize;
+			const float high = histogram.quantile(0.95) / SwIspStats::kYHistogramSize;
+			const float range = high - low;
+			const float base = defaultContrast_.value_or(kDefaultContrast);
+			float target = base +
+				       autoContrastRangeGain_ * (autoContrastTargetRange_ - range);
+
+			const float exposureMs =
+				context.configuration.agc.lineDuration.get<std::milli>() *
+				context.activeState.agc.exposure * context.activeState.agc.again;
+			const float lowLight = std::clamp(
+				(exposureMs - autoContrastLowLightStartMs_) /
+					(autoContrastLowLightEndMs_ - autoContrastLowLightStartMs_),
+				0.0f, 1.0f);
+			target += lowLight * (autoContrastMin_ - target);
+
+			target = std::clamp(target, autoContrastMin_, autoContrastMax_);
+			currentAutoContrast_ +=
+				autoContrastSmoothing_ * (target - currentAutoContrast_);
+			context.activeState.knobs.contrast = currentAutoContrast_;
+			LOG(IPASoftAdjust, Debug)
+				<< "Auto contrast " << currentAutoContrast_
+				<< " target " << target << ", luminance range " << range
+				<< ", exposure " << exposureMs << " ms, low-light weight "
+				<< lowLight;
+		}
+	}
+
 	const auto &gamma = frameContext.gamma;
 	metadata.set(controls::Gamma, gamma);
 
