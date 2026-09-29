@@ -110,9 +110,10 @@ int ViewFinderGL::setFormat(const libcamera::PixelFormat &format, const QSize &s
 void ViewFinderGL::stop()
 {
 	if (buffer_) {
+		image_ = nullptr;
+		dmaSyncers_.clear();
 		renderComplete(buffer_);
 		buffer_ = nullptr;
-		image_ = nullptr;
 	}
 }
 
@@ -125,10 +126,13 @@ QImage ViewFinderGL::getCurrentImage()
 
 void ViewFinderGL::render(libcamera::FrameBuffer *buffer, Image *image)
 {
-	if (buffer_)
+	if (buffer_) {
+		dmaSyncers_.clear();
 		renderComplete(buffer_);
+	}
 
 	image_ = image;
+	dmaSyncers_ = image->startAccess();
 	update();
 	buffer_ = buffer;
 }

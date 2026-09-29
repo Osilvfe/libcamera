@@ -117,6 +117,7 @@ void FileSink::writeBuffer(const Stream *stream, FrameBuffer *buffer,
 	}
 
 	Image *image = mappedBuffers_[buffer].get();
+	Image::DmaSyncers dmaSyncers = image->startAccess();
 
 #ifdef HAVE_TIFF
 	if (fileType_ == FileType::Dng) {

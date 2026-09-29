@@ -89,6 +89,7 @@ int ViewFinderQt::setFormat(const libcamera::PixelFormat &format, const QSize &s
 void ViewFinderQt::render(libcamera::FrameBuffer *buffer, Image *image)
 {
 	size_t size = buffer->metadata().planes()[0].bytesused;
+	Image::DmaSyncers dmaSyncers = image->startAccess();
 
 	{
 		QMutexLocker locker(&mutex_);
@@ -109,6 +110,7 @@ void ViewFinderQt::render(libcamera::FrameBuffer *buffer, Image *image)
 					size_.height(), size / size_.height(),
 					::nativeFormats[format_]);
 			std::swap(buffer, buffer_);
+			std::swap(dmaSyncers, dmaSyncers_);
 		} else {
 			/*
 			 * Otherwise, convert the format and release the frame
@@ -125,6 +127,7 @@ void ViewFinderQt::render(libcamera::FrameBuffer *buffer, Image *image)
 	setAttribute(Qt::WA_OpaquePaintEvent, true);
 	update();
 
+	dmaSyncers.clear();
 	if (buffer)
 		renderComplete(buffer);
 }
@@ -132,6 +135,7 @@ void ViewFinderQt::render(libcamera::FrameBuffer *buffer, Image *image)
 void ViewFinderQt::stop()
 {
 	image_ = QImage();
+	dmaSyncers_.clear();
 
 	if (buffer_) {
 		renderComplete(buffer_);

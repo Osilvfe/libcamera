@@ -229,6 +229,7 @@ void SDLSink::processSDLEvents()
 void SDLSink::renderBuffer(FrameBuffer *buffer)
 {
 	Image *image = mappedBuffers_[buffer].get();
+	Image::DmaSyncers dmaSyncers = image->startAccess();
 
 	std::vector<Span<const uint8_t>> planes;
 	unsigned int i = 0;

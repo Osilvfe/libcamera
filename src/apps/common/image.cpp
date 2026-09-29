@@ -31,6 +31,11 @@ std::unique_ptr<Image> Image::fromFrameBuffer(const FrameBuffer *buffer, MapMode
 	if (mode & MapMode::WriteOnly)
 		mmapFlags |= PROT_WRITE;
 
+	if ((mode & MapMode::ReadOnly) && (mode & MapMode::WriteOnly))
+		image->syncType_ = DmaSyncer::SyncType::ReadWrite;
+	else if (mode & MapMode::WriteOnly)
+		image->syncType_ = DmaSyncer::SyncType::Write;
+
 	struct MappedBufferInfo {
 		uint8_t *address = nullptr;
 		size_t mapLength = 0;
@@ -43,6 +48,7 @@ std::unique_ptr<Image> Image::fromFrameBuffer(const FrameBuffer *buffer, MapMode
 		if (mappedBuffers.find(fd) == mappedBuffers.end()) {
 			const size_t length = lseek(fd, 0, SEEK_END);
 			mappedBuffers[fd] = MappedBufferInfo{ nullptr, 0, length };
+			image->dmaBufs_.push_back(plane.fd);
 		}
 
 		const size_t length = mappedBuffers[fd].dmabufLength;
@@ -94,6 +100,17 @@ Image::~Image()
 unsigned int Image::numPlanes() const
 {
 	return planes_.size();
+}
+
+Image::DmaSyncers Image::startAccess() const
+{
+	DmaSyncers syncers;
+	syncers.reserve(dmaBufs_.size());
+
+	for (const SharedFD &fd : dmaBufs_)
+		syncers.emplace_back(fd, syncType_);
+
+	return syncers;
 }
 
 Span<uint8_t> Image::data(unsigned int plane)

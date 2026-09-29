@@ -340,10 +340,11 @@ int DebayerEGL::configure(const StreamConfiguration &inputCfg,
 	window_.height = outputCfg.size.height;
 
 	/*
-	 * Don't pass x,y from window_ since process() already adjusts for it.
-	 * But crop the window to 2/3 of its width and height for speedup.
+	 * Unlike the CPU debayer, EGL statistics process the complete input
+	 * buffer directly. Use the absolute crop coordinates so that statistics
+	 * cover the same image area that the shader renders.
 	 */
-	stats_->setWindow(Rectangle(window_.size()));
+	stats_->setWindow(window_);
 
 	inputBufferCount_ = inputCfg.bufferCount;
 	outputBufferCount_ = outputCfg.bufferCount;

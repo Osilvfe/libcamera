@@ -655,6 +655,7 @@ void MainWindow::processRaw(FrameBuffer *buffer,
 							"DNG Files (*.dng)");
 
 	if (!filename.isEmpty()) {
+		Image::DmaSyncers dmaSyncers = mappedBuffers_[buffer]->startAccess();
 		uint8_t *memory = mappedBuffers_[buffer]->data(0).data();
 		DNGWriter::write(filename.toStdString().c_str(), camera_.get(),
 				 rawStream_->configuration(), metadata, buffer,

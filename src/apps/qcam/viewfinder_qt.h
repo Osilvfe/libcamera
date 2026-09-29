@@ -18,6 +18,7 @@
 #include <libcamera/framebuffer.h>
 #include <libcamera/pixel_format.h>
 
+#include "../common/image.h"
 #include "format_converter.h"
 #include "viewfinder.h"
 
@@ -61,6 +62,7 @@ private:
 
 	/* Buffer and render image */
 	libcamera::FrameBuffer *buffer_;
+	Image::DmaSyncers dmaSyncers_;
 	QImage image_;
 	QMutex mutex_; /* Prevent concurrent access to image_ */
 };

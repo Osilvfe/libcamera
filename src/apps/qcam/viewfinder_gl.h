@@ -23,6 +23,7 @@
 #include <libcamera/formats.h>
 #include <libcamera/framebuffer.h>
 
+#include "../common/image.h"
 #include "viewfinder.h"
 
 class ViewFinderGL : public QOpenGLWidget,
@@ -70,6 +71,7 @@ private:
 	QSize size_;
 	unsigned int stride_;
 	Image *image_;
+	Image::DmaSyncers dmaSyncers_;
 
 	/* Shaders */
 	QOpenGLShaderProgram shaderProgram_;
