@@ -33,6 +33,7 @@
 #include <libcamera/stream.h>
 
 #include "libcamera/internal/camera.h"
+#include "libcamera/internal/camera_lens.h"
 #include "libcamera/internal/camera_manager.h"
 #include "libcamera/internal/camera_sensor.h"
 #include "libcamera/internal/camera_sensor_properties.h"
@@ -341,6 +342,8 @@ public:
 	 */
 	std::list<Entity> entities_;
 	std::unique_ptr<CameraSensor> sensor_;
+	CameraLens *focusLens_;
+	int32_t focusPosition_;
 	V4L2VideoDevice *video_;
 	V4L2Subdevice *frameStartEmitter_;
 
@@ -469,7 +472,8 @@ private:
 SimpleCameraData::SimpleCameraData(SimplePipelineHandler *pipe,
 				   unsigned int numStreams,
 				   MediaEntity *sensor)
-	: Camera::Private(pipe), streams_(numStreams), rawStream_(nullptr)
+	: Camera::Private(pipe), streams_(numStreams), rawStream_(nullptr),
+	  focusLens_(nullptr), focusPosition_(0)
 {
 	/*
 	 * Find the shortest path from the camera sensor to a video capture
@@ -663,6 +667,35 @@ int SimpleCameraData::init()
 	}
 
 	properties_ = sensor_->properties();
+
+	/*
+	 * Expose the native actuator position until a module-specific conversion
+	 * to the dioptre units used by LensPosition has been calibrated.
+	 */
+	focusLens_ = sensor_->focusLens();
+	if (focusLens_) {
+		auto focus = focusLens_->controls().find(V4L2_CID_FOCUS_ABSOLUTE);
+		if (focus == focusLens_->controls().end()) {
+			LOG(SimplePipeline, Warning)
+				<< "Focus lens has no V4L2_CID_FOCUS_ABSOLUTE control";
+			focusLens_ = nullptr;
+		} else {
+			ControlInfoMap::Map controlsMap(controlInfo_.begin(),
+							 controlInfo_.end());
+			const ControlValue manual(controls::AfModeManual);
+			const ControlValue idle(controls::AfStateIdle);
+
+			controlsMap.emplace(&controls::AfMode,
+					    ControlInfo(manual, manual, manual));
+			controlsMap.emplace(&controls::AfState,
+					    ControlInfo(idle, idle, idle));
+			controlsMap.emplace(&controls::draft::FocusAbsolute,
+					    focus->second);
+			controlInfo_ = ControlInfoMap(std::move(controlsMap),
+						  controls::controls);
+			focusPosition_ = focus->second.def().get<int32_t>();
+		}
+	}
 
 	/* Find the first subdev that can generate a frame start signal, if any. */
 	frameStartEmitter_ = nullptr;
@@ -1738,6 +1771,24 @@ int SimplePipelineHandler::queueRequestDevice(Camera *camera, Request *request)
 {
 	SimpleCameraData *data = cameraData(camera);
 	int ret;
+
+	if (data->focusLens_) {
+		const auto &position =
+			request->controls().get(controls::draft::FocusAbsolute);
+		if (position) {
+			ret = data->focusLens_->setFocusPosition(*position);
+			if (ret < 0)
+				return ret;
+
+			data->focusPosition_ = *position;
+		}
+
+		ControlList &metadata = request->_d()->metadata();
+		metadata.set(controls::AfMode, controls::AfModeManual);
+		metadata.set(controls::AfState, controls::AfStateIdle);
+		metadata.set(controls::draft::FocusAbsolute,
+			     data->focusPosition_);
+	}
 
 	std::map<const Stream *, FrameBuffer *> buffers;
 	bool metadataRequired = false;

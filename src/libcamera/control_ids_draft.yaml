@@ -294,4 +294,17 @@ controls:
         Currently identical to ANDROID_STATISTICS_FACE_IDS.
       size: [n]
 
+  - FocusAbsolute:
+      type: int32_t
+      direction: inout
+      description: |
+        Absolute focus actuator position in the native units exposed by the
+        V4L2 lens subdevice.
+
+        This control is intended for lens actuators that have not yet been
+        calibrated to the dioptre units required by the LensPosition control.
+        The valid range and default value are copied from
+        V4L2_CID_FOCUS_ABSOLUTE. Applications should not compare values across
+        different camera modules.
+
 ...
