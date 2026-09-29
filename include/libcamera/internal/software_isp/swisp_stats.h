@@ -32,6 +32,14 @@ struct SwIspStats {
 	 */
 	RGB<uint64_t> sum_;
 	/**
+	 * \brief Sum of horizontal luminance gradients used for focus measurement
+	 */
+	uint64_t focusSum;
+	/**
+	 * \brief Number of gradients accumulated in focusSum
+	 */
+	uint32_t focusSamples;
+	/**
 	 * \brief Number of bins in the yHistogram
 	 */
 	static constexpr unsigned int kYHistogramSize = 64;

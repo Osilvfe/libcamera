@@ -6,6 +6,7 @@
  */
 
 #include <chrono>
+#include <limits>
 #include <stdint.h>
 #include <sys/mman.h>
 
@@ -215,6 +216,8 @@ int IPASoftSimple::init(const IPASettings &settings,
 					      : gainInfo.max().get<int32_t>()),
 		static_cast<float>(camHelper_ ? camHelper_->gain(gainInfo.def().get<int32_t>())
 					      : gainInfo.def().get<int32_t>()));
+	context_.ctrlMap[&controls::FocusFoM] = ControlInfo(
+		0, std::numeric_limits<int32_t>::max(), 0);
 
 	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
 	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
@@ -332,6 +335,13 @@ void IPASoftSimple::processStats(const uint32_t frame,
 	ControlList metadata(controls::controls);
 	for (const auto &algo : algorithms())
 		algo->process(context_, frame, frameContext, stats_, metadata);
+	if (stats_->valid && stats_->focusSamples) {
+		const uint64_t focus = stats_->focusSum * 1024 /
+				       stats_->focusSamples;
+		metadata.set(controls::FocusFoM,
+			     static_cast<int32_t>(std::min<uint64_t>(
+				     focus, std::numeric_limits<int32_t>::max())));
+	}
 	metadataReady.emit(frame, metadata);
 
 	/* Sanity check */

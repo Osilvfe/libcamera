@@ -174,10 +174,14 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
 #define SWSTATS_START_LINE_STATS(pixel_t) \
 	pixel_t r, g, g2, b;              \
 	uint64_t yVal;                    \
+	uint32_t previousY = 0;           \
+	bool havePreviousY = false;       \
                                           \
 	uint64_t sumR = 0;                \
 	uint64_t sumG = 0;                \
-	uint64_t sumB = 0;
+	uint64_t sumB = 0;                \
+	uint64_t focusSum = 0;            \
+	uint32_t focusSamples = 0;
 
 #define SWSTATS_ACCUMULATE_LINE_STATS(div) \
 	sumR += r;                         \
@@ -187,12 +191,24 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
 	yVal = r * kRedYMul;               \
 	yVal += g * kGreenYMul;            \
 	yVal += b * kBlueYMul;             \
+	{                                          \
+		const uint32_t focusY = yVal / (256 * (div)); \
+		if (havePreviousY) {                 \
+			focusSum += focusY > previousY ? focusY - previousY \
+							 : previousY - focusY; \
+			focusSamples++;                    \
+		}                                      \
+		previousY = focusY;                  \
+		havePreviousY = true;                \
+	}                                          \
 	stats.yHistogram[yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div))]++;
 
 #define SWSTATS_FINISH_LINE_STATS() \
 	stats.sum_.r() += sumR;     \
 	stats.sum_.g() += sumG;     \
-	stats.sum_.b() += sumB;
+	stats.sum_.b() += sumB;     \
+	stats.focusSum += focusSum; \
+	stats.focusSamples += focusSamples;
 
 void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats)
 {
@@ -391,6 +407,8 @@ void SwStatsCpu::startFrame(uint32_t frame)
 
 	for (auto &s : stats_) {
 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
+		s.focusSum = 0;
+		s.focusSamples = 0;
 		s.yHistogram.fill(0);
 	}
 }
@@ -408,9 +426,13 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
 
 	if (valid) {
 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+		sharedStats_->focusSum = 0;
+		sharedStats_->focusSamples = 0;
 		sharedStats_->yHistogram.fill(0);
 		for (const auto &s : stats_) {
 			sharedStats_->sum_ += s.sum_;
+			sharedStats_->focusSum += s.focusSum;
+			sharedStats_->focusSamples += s.focusSamples;
 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++)
 				sharedStats_->yHistogram[j] += s.yHistogram[j];
 		}
