@@ -34,6 +34,7 @@
 #include <libcamera/stream.h>
 
 #include "libcamera/internal/camera.h"
+#include "libcamera/internal/camera_flash.h"
 #include "libcamera/internal/camera_lens.h"
 #include "libcamera/internal/camera_manager.h"
 #include "libcamera/internal/camera_sensor.h"
@@ -296,6 +297,10 @@ public:
 	void clearIncompleteRequests();
 	int handleFocusControls(Request *request);
 	void updateAutoFocus(Request *request, const ControlList &metadata);
+	int handleFlashControls(Request *request);
+	int triggerSingleFlash(Request *request);
+	void stopFlashes();
+	void writeFlashMetadata(Request *request);
 
 	unsigned int streamIndex(const Stream *stream) const
 	{
@@ -346,6 +351,7 @@ public:
 	std::list<Entity> entities_;
 	std::unique_ptr<CameraSensor> sensor_;
 	CameraLens *focusLens_;
+	std::vector<CameraFlash *> flashes_;
 	int32_t focusPosition_;
 	int32_t focusMinimum_;
 	int32_t focusMaximum_;
@@ -393,6 +399,12 @@ private:
 	int32_t afBestFoM_;
 	int32_t afLockedFoM_;
 	unsigned int afLowFocusFrames_;
+
+	int32_t flashMode_;
+	int32_t flashIntensity_;
+	int32_t torchIntensity_;
+	int32_t flashTimeout_;
+	bool singleFlashArmed_;
 
 	void tryPipeline(unsigned int code, const Size &size);
 	static std::vector<const MediaPad *> routedSourcePads(MediaPad *sink);
@@ -507,7 +519,9 @@ SimpleCameraData::SimpleCameraData(SimplePipelineHandler *pipe,
 	  afState_(controls::AfStateIdle), afScanStage_(AfScanStage::Idle),
 	  afScanPosition_(0), afScanEnd_(0), afScanStep_(0), afCoarseStep_(0),
 	  afBestPosition_(0), afBestFoM_(std::numeric_limits<int32_t>::min()),
-	  afLockedFoM_(0), afLowFocusFrames_(0)
+	  afLockedFoM_(0), afLowFocusFrames_(0),
+	  flashMode_(controls::draft::FlashModeOff), flashIntensity_(0),
+	  torchIntensity_(0), flashTimeout_(0), singleFlashArmed_(false)
 {
 	/*
 	 * Find the shortest path from the camera sensor to a video capture
@@ -738,6 +752,72 @@ int SimpleCameraData::init()
 		}
 	}
 
+	for (const std::unique_ptr<CameraFlash> &flash : sensor_->flashes())
+		flashes_.push_back(flash.get());
+
+	if (!flashes_.empty()) {
+		int32_t flashMin = std::numeric_limits<int32_t>::min();
+		int32_t flashMax = std::numeric_limits<int32_t>::max();
+		int32_t torchMin = std::numeric_limits<int32_t>::min();
+		int32_t torchMax = std::numeric_limits<int32_t>::max();
+		int32_t timeoutMin = std::numeric_limits<int32_t>::min();
+		int32_t timeoutMax = std::numeric_limits<int32_t>::max();
+		int32_t faultMax = 0;
+
+		for (CameraFlash *flash : flashes_) {
+			const ControlInfoMap &flashControls = flash->controls();
+			const ControlInfo &flashInfo =
+				flashControls.at(V4L2_CID_FLASH_INTENSITY);
+			const ControlInfo &torchInfo =
+				flashControls.at(V4L2_CID_FLASH_TORCH_INTENSITY);
+			const ControlInfo &timeoutInfo =
+				flashControls.at(V4L2_CID_FLASH_TIMEOUT);
+			const ControlInfo &faultInfo =
+				flashControls.at(V4L2_CID_FLASH_FAULT);
+
+			flashMin = std::max(flashMin, flashInfo.min().get<int32_t>());
+			flashMax = std::min(flashMax, flashInfo.max().get<int32_t>());
+			torchMin = std::max(torchMin, torchInfo.min().get<int32_t>());
+			torchMax = std::min(torchMax, torchInfo.max().get<int32_t>());
+			timeoutMin = std::max(timeoutMin, timeoutInfo.min().get<int32_t>());
+			timeoutMax = std::min(timeoutMax, timeoutInfo.max().get<int32_t>());
+			faultMax |= faultInfo.max().get<int32_t>();
+		}
+
+		if (flashMin > flashMax || torchMin > torchMax ||
+		    timeoutMin > timeoutMax) {
+			LOG(SimplePipeline, Error)
+				<< "Associated flash units have incompatible control ranges";
+			flashes_.clear();
+		} else {
+			flashIntensity_ = flashMin;
+			torchIntensity_ = torchMin;
+			flashTimeout_ = std::clamp(100000, timeoutMin, timeoutMax);
+
+			ControlInfoMap::Map controlsMap(controlInfo_.begin(),
+							controlInfo_.end());
+			const ControlValue off(controls::draft::FlashModeOff);
+			const ControlValue ready(controls::draft::FlashStateReady);
+			controlsMap.emplace(&controls::draft::FlashMode,
+					    ControlInfo(controls::draft::FlashModeValues,
+							off));
+			controlsMap.emplace(&controls::draft::FlashIntensity,
+					    ControlInfo(flashMin, flashMax, flashMin));
+			controlsMap.emplace(&controls::draft::TorchIntensity,
+					    ControlInfo(torchMin, torchMax, torchMin));
+			controlsMap.emplace(&controls::draft::FlashTimeout,
+					    ControlInfo(timeoutMin, timeoutMax,
+							flashTimeout_));
+			controlsMap.emplace(&controls::draft::FlashState,
+					    ControlInfo(controls::draft::FlashStateValues,
+							ready));
+			controlsMap.emplace(&controls::draft::FlashFault,
+					    ControlInfo(0, faultMax, 0));
+			controlInfo_ = ControlInfoMap(std::move(controlsMap),
+						      controls::controls);
+		}
+	}
+
 	/* Find the first subdev that can generate a frame start signal, if any. */
 	frameStartEmitter_ = nullptr;
 	for (const Entity &entity : entities_) {
@@ -910,6 +990,163 @@ int SimpleCameraData::handleFocusControls(Request *request)
 
 	writeFocusMetadata(request);
 	return 0;
+}
+
+void SimpleCameraData::stopFlashes()
+{
+	for (CameraFlash *flash : flashes_) {
+		int ret = flash->stop();
+		if (ret)
+			LOG(SimplePipeline, Error)
+				<< "Failed to stop flash '" << flash->model() << "'";
+	}
+
+	flashMode_ = controls::draft::FlashModeOff;
+	singleFlashArmed_ = false;
+}
+
+int SimpleCameraData::handleFlashControls(Request *request)
+{
+	if (flashes_.empty())
+		return 0;
+
+	const auto &mode = request->controls().get(controls::draft::FlashMode);
+	const auto &flashIntensity =
+		request->controls().get(controls::draft::FlashIntensity);
+	const auto &torchIntensity =
+		request->controls().get(controls::draft::TorchIntensity);
+	const auto &timeout = request->controls().get(controls::draft::FlashTimeout);
+
+	int32_t nextMode = mode.value_or(flashMode_);
+	int32_t nextFlashIntensity = flashIntensity.value_or(flashIntensity_);
+	int32_t nextTorchIntensity = torchIntensity.value_or(torchIntensity_);
+	int32_t nextTimeout = timeout.value_or(flashTimeout_);
+	bool update = mode || flashIntensity || torchIntensity || timeout;
+	int ret = 0;
+
+	if (update) {
+		switch (nextMode) {
+		case controls::draft::FlashModeOff:
+			stopFlashes();
+			break;
+
+		case controls::draft::FlashModeTorch:
+			for (CameraFlash *flash : flashes_) {
+				ret = flash->setTorch(nextTorchIntensity);
+				if (ret)
+					break;
+			}
+			break;
+
+		case controls::draft::FlashModeSingle:
+			for (CameraFlash *flash : flashes_) {
+				ret = flash->prepareFlash(nextFlashIntensity,
+							  nextTimeout);
+				if (ret)
+					break;
+			}
+			break;
+
+		default:
+			ret = -EINVAL;
+			break;
+		}
+	}
+
+	ControlList &metadata = request->_d()->metadata();
+	if (ret) {
+		stopFlashes();
+		metadata.set(controls::draft::FlashMode,
+			     controls::draft::FlashModeOff);
+		metadata.set(controls::draft::FlashState,
+			     controls::draft::FlashStateFault);
+		metadata.set(controls::draft::FlashFault, 0);
+		return ret;
+	}
+
+	flashMode_ = nextMode;
+	flashIntensity_ = nextFlashIntensity;
+	torchIntensity_ = nextTorchIntensity;
+	flashTimeout_ = nextTimeout;
+	metadata.set(controls::draft::FlashMode, nextMode);
+	metadata.set(controls::draft::FlashIntensity, nextFlashIntensity);
+	metadata.set(controls::draft::TorchIntensity, nextTorchIntensity);
+	metadata.set(controls::draft::FlashTimeout, nextTimeout);
+	metadata.set(controls::draft::FlashState,
+		     nextMode == controls::draft::FlashModeOff
+			     ? controls::draft::FlashStateReady
+			     : controls::draft::FlashStateActive);
+	metadata.set(controls::draft::FlashFault, 0);
+
+	return 0;
+}
+
+int SimpleCameraData::triggerSingleFlash(Request *request)
+{
+	const auto &mode = request->_d()->metadata().get(controls::draft::FlashMode);
+	if (!mode || *mode != controls::draft::FlashModeSingle)
+		return 0;
+
+	for (CameraFlash *flash : flashes_) {
+		int ret = flash->strobe();
+		if (ret) {
+			stopFlashes();
+			request->_d()->metadata().set(controls::draft::FlashState,
+						      controls::draft::FlashStateFault);
+			return ret;
+		}
+	}
+
+	/* Single is edge-triggered and must not carry over to another request. */
+	flashMode_ = controls::draft::FlashModeOff;
+	singleFlashArmed_ = true;
+	return 0;
+}
+
+void SimpleCameraData::writeFlashMetadata(Request *request)
+{
+	if (flashes_.empty())
+		return;
+
+	ControlList &metadata = request->_d()->metadata();
+	int32_t fault = 0;
+	bool strobing = false;
+	bool accessError =
+		metadata.get(controls::draft::FlashState) ==
+		controls::draft::FlashStateFault;
+
+	for (CameraFlash *flash : flashes_) {
+		bool unitStrobing;
+		int32_t unitFault;
+		int ret = flash->status(&unitStrobing, &unitFault);
+		if (ret)
+			accessError = true;
+		else {
+			strobing |= unitStrobing;
+			fault |= unitFault;
+		}
+	}
+
+	metadata.set(controls::draft::FlashFault, fault);
+	const int32_t unexpectedFault =
+		fault & ~static_cast<int32_t>(V4L2_FLASH_FAULT_TIMEOUT);
+	if (accessError || unexpectedFault) {
+		metadata.set(controls::draft::FlashState,
+			     controls::draft::FlashStateFault);
+		return;
+	}
+
+	const int32_t mode = metadata.get(controls::draft::FlashMode)
+				     .value_or(controls::draft::FlashModeOff);
+	metadata.set(controls::draft::FlashState,
+		     mode == controls::draft::FlashModeOff && !strobing
+			     ? controls::draft::FlashStateReady
+			     : controls::draft::FlashStateActive);
+
+	/* Return to a defined Off mode once the hardware timeout has expired. */
+	if (singleFlashArmed_ &&
+	    (!strobing || (fault & V4L2_FLASH_FAULT_TIMEOUT)))
+		stopFlashes();
 }
 
 void SimpleCameraData::updateAutoFocus(Request *request,
@@ -1244,6 +1481,7 @@ void SimpleCameraData::tryCompleteRequest(Request *request)
 	if (info->metadataRequired && !info->metadataProcessed)
 		return;
 
+	writeFlashMetadata(request);
 	frameInfo_.destroy(info->frame);
 	pipe()->completeRequest(request);
 }
@@ -1957,6 +2195,8 @@ void SimplePipelineHandler::stopDevice(Camera *camera)
 	V4L2VideoDevice *video = data->video_;
 	V4L2Subdevice *frameStartEmitter = data->frameStartEmitter_;
 
+	data->stopFlashes();
+
 	if (frameStartEmitter) {
 		frameStartEmitter->setFrameStartEnabled(false);
 		frameStartEmitter->frameStart.disconnect(data->delayedCtrls_.get(),
@@ -1991,6 +2231,10 @@ int SimplePipelineHandler::queueRequestDevice(Camera *camera, Request *request)
 	if (ret < 0)
 		return ret;
 
+	ret = data->handleFlashControls(request);
+	if (ret < 0)
+		return ret;
+
 	std::map<const Stream *, FrameBuffer *> buffers;
 	bool metadataRequired = false;
 
@@ -2005,8 +2249,10 @@ int SimplePipelineHandler::queueRequestDevice(Camera *camera, Request *request)
 			metadataRequired = !!data->swIsp_;
 		} else {
 			ret = data->video_->queueBuffer(buffer);
-			if (ret < 0)
+			if (ret < 0) {
+				data->stopFlashes();
 				return ret;
+			}
 		}
 	}
 
@@ -2016,6 +2262,12 @@ int SimplePipelineHandler::queueRequestDevice(Camera *camera, Request *request)
 		if (data->swIsp_)
 			data->swIsp_->queueRequest(request->sequence(), request->controls());
 	}
+
+	ret = data->triggerSingleFlash(request);
+	if (ret < 0)
+		LOG(SimplePipeline, Error)
+			<< "Failed to trigger single flash for request "
+			<< request->sequence();
 
 	return 0;
 }

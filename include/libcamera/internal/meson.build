@@ -7,6 +7,7 @@ libcamera_internal_headers = files([
     'byte_stream_buffer.h',
     'camera.h',
     'camera_controls.h',
+    'camera_flash.h',
     'camera_lens.h',
     'camera_manager.h',
     'camera_sensor.h',

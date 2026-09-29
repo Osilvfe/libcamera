@@ -307,4 +307,70 @@ controls:
         V4L2_CID_FOCUS_ABSOLUTE. Applications should not compare values across
         different camera modules.
 
+  - FlashMode:
+      type: int32_t
+      direction: inout
+      description: |
+        Select how the flash units associated with the camera are used. Single
+        mode fires once for the request that carries the control. Torch mode
+        stays active until a later request selects Off or the camera stops.
+      enum:
+        - name: FlashModeOff
+          value: 0
+          description: The flash units are off.
+        - name: FlashModeSingle
+          value: 1
+          description: Fire the flash units once for this request.
+        - name: FlashModeTorch
+          value: 2
+          description: Keep the flash units continuously illuminated.
+
+  - FlashIntensity:
+      type: int32_t
+      direction: inout
+      description: |
+        Per-LED current in microamperes used for a single flash. The valid range
+        is the intersection of the ranges supported by all associated units.
+
+  - TorchIntensity:
+      type: int32_t
+      direction: inout
+      description: |
+        Per-LED current in microamperes used in Torch mode. The valid range is
+        the intersection of the ranges supported by all associated units.
+
+  - FlashTimeout:
+      type: int32_t
+      direction: inout
+      description: |
+        Hardware timeout for a single flash in microseconds.
+
+  - FlashState:
+      type: int32_t
+      direction: out
+      description: |
+        State of the flash units for the completed request.
+      enum:
+        - name: FlashStateUnavailable
+          value: 0
+          description: No usable flash unit is available.
+        - name: FlashStateReady
+          value: 1
+          description: The flash units are ready and not illuminated.
+        - name: FlashStateActive
+          value: 2
+          description: A single flash fired or Torch mode is active.
+        - name: FlashStateFault
+          value: 3
+          description: A flash access failed or a hardware fault was reported.
+
+  - FlashFault:
+      type: int32_t
+      direction: out
+      description: |
+        Bitwise OR of the V4L2 flash fault flags reported by all associated
+        flash units. A zero value indicates no reported hardware fault. The
+        timeout bit is expected on hardware that reports expiry of a requested
+        single-flash timeout through its fault status.
+
 ...

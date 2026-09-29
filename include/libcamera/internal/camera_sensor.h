@@ -28,6 +28,7 @@
 
 namespace libcamera {
 
+class CameraFlash;
 class CameraLens;
 class MediaEntity;
 class SensorConfiguration;
@@ -48,6 +49,7 @@ public:
 	virtual V4L2Subdevice *device() = 0;
 
 	virtual CameraLens *focusLens() = 0;
+	virtual const std::vector<std::unique_ptr<CameraFlash>> &flashes() const = 0;
 
 	virtual const std::vector<unsigned int> &mbusCodes() const = 0;
 	virtual std::vector<Size> sizes(unsigned int mbusCode) const = 0;

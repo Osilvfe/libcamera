@@ -31,6 +31,7 @@
 #include <libcamera/ipa/core_ipa_interface.h>
 
 #include "libcamera/internal/bayer_format.h"
+#include "libcamera/internal/camera_flash.h"
 #include "libcamera/internal/camera_lens.h"
 #include "libcamera/internal/camera_sensor.h"
 #include "libcamera/internal/camera_sensor_properties.h"
@@ -68,6 +69,10 @@ public:
 	V4L2Subdevice *device() override { return subdev_.get(); }
 
 	CameraLens *focusLens() override { return focusLens_.get(); }
+	const std::vector<std::unique_ptr<CameraFlash>> &flashes() const override
+	{
+		return flashes_;
+	}
 
 	const std::vector<unsigned int> &mbusCodes() const override { return mbusCodes_; }
 	std::vector<Size> sizes(unsigned int mbusCode) const override;
@@ -140,6 +145,7 @@ private:
 	ControlList properties_;
 
 	std::unique_ptr<CameraLens> focusLens_;
+	std::vector<std::unique_ptr<CameraFlash>> flashes_;
 };
 
 /**
@@ -665,6 +671,18 @@ int CameraSensorLegacy::discoverAncillaryDevices()
 				focusLens_.reset();
 			}
 			break;
+
+		case MEDIA_ENT_F_FLASH: {
+			auto flash = std::make_unique<CameraFlash>(ancillary);
+			ret = flash->init();
+			if (ret) {
+				LOG(CameraSensor, Error)
+					<< "Flash initialisation failed, flash disabled";
+				break;
+			}
+			flashes_.push_back(std::move(flash));
+			break;
+		}
 
 		default:
 			LOG(CameraSensor, Warning)

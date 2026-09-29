@@ -23,9 +23,11 @@ exposed_controls = [
     'ExposureValue', 'ExposureTime', 'ExposureTimeMode',
     'AnalogueGain', 'AnalogueGainMode', 'AeFlickerPeriod',
     'Brightness', 'Contrast', 'AwbEnable', 'AwbMode', 'ColourGains',
-    'Saturation', 'Sharpness', 'ColourCorrectionMatrix', 'ScalerCrop',
+    'ColourTemperature', 'Saturation', 'Sharpness', 'NoiseReductionMode',
+    'ColourCorrectionMatrix', 'ScalerCrop',
     'DigitalGain', 'AfMode', 'AfRange', 'AfSpeed', 'AfMetering', 'AfWindows',
-    'LensPosition', 'Gamma',
+    'LensPosition', 'Gamma', 'FlashMode', 'FlashIntensity', 'TorchIntensity',
+    'FlashTimeout',
 ]
 
 

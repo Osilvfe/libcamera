@@ -20,6 +20,7 @@ libcamera_internal_sources = files([
     'bayer_format.cpp',
     'byte_stream_buffer.cpp',
     'camera_controls.cpp',
+    'camera_flash.cpp',
     'camera_lens.cpp',
     'clock_recovery.cpp',
     'control_serializer.cpp',

@@ -78,6 +78,13 @@ CameraSensor::~CameraSensor() = default;
  */
 
 /**
+ * \fn CameraSensor::flashes()
+ * \brief Retrieve the flash controllers associated with the sensor
+ *
+ * \return The flash controllers associated with the sensor
+ */
+
+/**
  * \fn CameraSensor::mbusCodes()
  * \brief Retrieve the media bus codes supported by the camera sensor
  *
