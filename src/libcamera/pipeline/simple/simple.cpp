@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <iterator>
 #include <limits>
 #include <list>
@@ -25,6 +26,7 @@
 #include <linux/media-bus-format.h>
 
 #include <libcamera/base/log.h>
+#include <libcamera/base/utils.h>
 
 #include <libcamera/camera.h>
 #include <libcamera/color_space.h>
@@ -360,6 +362,7 @@ public:
 	V4L2VideoDevice *video_;
 	V4L2Subdevice *frameStartEmitter_;
 	uint32_t frameStartSequence_ = 0;
+	std::map<uint64_t, uint32_t> frameStartSequences_;
 
 	std::vector<Configuration> configs_;
 	std::map<PixelFormat, std::vector<const Configuration *>> formats_;
@@ -377,6 +380,7 @@ public:
 	std::unique_ptr<Converter> converter_;
 	std::unique_ptr<SoftwareIsp> swIsp_;
 	SimpleFrames frameInfo_;
+	std::map<uint32_t, ControlList> sensorControls_;
 
 private:
 	enum class AfScanStage {
@@ -1135,6 +1139,14 @@ int SimpleCameraData::triggerSingleFlash(Request *request)
 void SimpleCameraData::frameStart(uint32_t hardwareSequence)
 {
 	const uint32_t sequence = frameStartSequence_++;
+	/* Capture buffer timestamps and the steady clock share the monotonic clock. */
+	const auto now = utils::clock::now().time_since_epoch();
+	const uint64_t timestamp =
+		std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+	frameStartSequences_.emplace(timestamp, sequence);
+	while (frameStartSequences_.size() > 64)
+		frameStartSequences_.erase(frameStartSequences_.begin());
+
 	delayedCtrls_->applyControls(sequence);
 	LOG(SimplePipeline, Debug)
 		<< "Frame start " << sequence
@@ -1463,6 +1475,7 @@ void SimpleCameraData::imageBufferReady(FrameBuffer *buffer)
 		SimpleFrameInfo *info = frameInfo_.find(outputs.request->sequence());
 		if (info)
 			info->metadataRequired = false;
+		sensorControls_.erase(outputs.request->sequence());
 		tryCompleteRequest(outputs.request);
 		conversionQueue_.pop();
 
@@ -1507,14 +1520,46 @@ void SimpleCameraData::imageBufferReady(FrameBuffer *buffer)
 
 		if (converter_)
 			converter_->queueBuffers(buffer, conversionQueue_.front().outputs);
-		else
+		else {
+			/*
+			 * Bind the controls in effect for the captured RAW frame to
+			 * the request before handing the buffer to the asynchronous
+			 * software ISP. Frame start sequences include frames skipped
+			 * while no input buffer is queued; request sequences do not.
+			 */
+			const uint32_t requestSequence = request->sequence();
+			uint32_t sensorSequence = buffer->metadata().sequence;
+
+			if (frameStartEmitter_) {
+				auto frameStart = frameStartSequences_.upper_bound(
+					buffer->metadata().timestamp);
+				if (frameStart != frameStartSequences_.begin()) {
+					--frameStart;
+					sensorSequence = frameStart->second;
+				} else {
+					LOG(SimplePipeline, Warning)
+						<< "No frame start before captured buffer "
+						<< buffer->metadata().sequence
+						<< " timestamp "
+						<< buffer->metadata().timestamp;
+				}
+			}
+
+			sensorControls_.insert_or_assign(
+				requestSequence, delayedCtrls_->get(sensorSequence));
+
+			LOG(SimplePipeline, Debug)
+				<< "Assigning sensor frame " << sensorSequence
+				<< " controls to request " << requestSequence;
+
 			/*
 			 * request->sequence() cannot be retrieved from `buffer' inside
 			 * queueBuffers because unique_ptr's make buffer->request() invalid
 			 * already here.
 			 */
-			swIsp_->queueBuffers(request->sequence(), buffer,
+			swIsp_->queueBuffers(requestSequence, buffer,
 					     conversionQueue_.front().outputs);
+		}
 
 		conversionQueue_.pop();
 		return;
@@ -1528,6 +1573,7 @@ void SimpleCameraData::imageBufferReady(FrameBuffer *buffer)
 void SimpleCameraData::clearIncompleteRequests()
 {
 	while (!conversionQueue_.empty()) {
+		sensorControls_.erase(conversionQueue_.front().request->sequence());
 		pipe()->cancelRequest(conversionQueue_.front().request);
 		conversionQueue_.pop();
 	}
@@ -1577,8 +1623,16 @@ void SimpleCameraData::conversionOutputDone(FrameBuffer *buffer)
 
 void SimpleCameraData::ispStatsReady(uint32_t frame, uint32_t bufferId)
 {
-	swIsp_->processStats(frame, bufferId,
-			     delayedCtrls_->get(frame));
+	auto controls = sensorControls_.find(frame);
+	if (controls == sensorControls_.end()) {
+		LOG(SimplePipeline, Warning)
+			<< "No captured sensor controls for request " << frame;
+		swIsp_->processStats(frame, bufferId, delayedCtrls_->get(frame));
+		return;
+	}
+
+	swIsp_->processStats(frame, bufferId, controls->second);
+	sensorControls_.erase(controls);
 }
 
 void SimpleCameraData::metadataReady(uint32_t frame, const ControlList &metadata)
@@ -2218,6 +2272,8 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
 
 	data->delayedCtrls_->reset();
 	data->frameStartSequence_ = 0;
+	data->frameStartSequences_.clear();
+	data->sensorControls_.clear();
 	if (frameStartEmitter) {
 		ret = frameStartEmitter->setFrameStartEnabled(true);
 		if (ret) {
@@ -2284,6 +2340,8 @@ void SimplePipelineHandler::stopDevice(Camera *camera)
 
 	data->frameInfo_.clear();
 	data->clearIncompleteRequests();
+	data->frameStartSequences_.clear();
+	data->sensorControls_.clear();
 	data->conversionBuffers_.clear();
 
 	releasePipeline(data);

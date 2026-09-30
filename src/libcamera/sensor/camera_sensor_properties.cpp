@@ -503,6 +503,26 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
 			},
 			.sensorDelays = { },
 		} },
+		{ "sc1320cs", {
+			.unitCellSize = { 1120, 1120 },
+			.testPatternModes = { },
+			.sensorDelays = {
+				.exposureDelay = 2,
+				.gainDelay = 2,
+				.vblankDelay = 0,
+				.hblankDelay = 0,
+			},
+		} },
+		{ "sc820cs", {
+			.unitCellSize = { 1120, 1120 },
+			.testPatternModes = { },
+			.sensorDelays = {
+				.exposureDelay = 2,
+				.gainDelay = 2,
+				.vblankDelay = 0,
+				.hblankDelay = 0,
+			},
+		} },
 		{ "vd55g1", {
 			.unitCellSize = { 2160, 2160 },
 			.testPatternModes = {
