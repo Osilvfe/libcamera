@@ -8,6 +8,7 @@
 #include "agc.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <stdint.h>
@@ -141,8 +142,18 @@ int Agc::init(IPAContext &context, const ValueNode &tuningData)
 	utils::Duration maxDuration = lineDuration * sensorInfo.maxFrameLength;
 	int64_t minFrameDuration = minDuration.get<std::micro>();
 	int64_t maxFrameDuration = maxDuration.get<std::micro>();
+	int64_t defaultMaxFrameDuration = maxFrameDuration;
+	if (defaultMaxFrameDuration_)
+		defaultMaxFrameDuration = std::clamp(
+			static_cast<int64_t>(
+				defaultMaxFrameDuration_->get<std::micro>()),
+			minFrameDuration, maxFrameDuration);
+	const std::array<int64_t, 2> defaultFrameDurations = {
+		minFrameDuration, defaultMaxFrameDuration
+	};
 	context.ctrlMap[&controls::FrameDurationLimits] = ControlInfo(
-		minFrameDuration, maxFrameDuration, minFrameDuration);
+		minFrameDuration, maxFrameDuration,
+		Span<const int64_t, 2>{ defaultFrameDurations });
 
 	return 0;
 }
@@ -168,14 +179,10 @@ int Agc::configure(IPAContext &context,
 	const auto it = context.ctrlMap.find(&controls::FrameDurationLimits);
 	const auto &cfg = context.configuration.agc;
 	if (it != context.ctrlMap.end() && cfg.vblankSupported) {
-		agc.minFrameDuration =
-			std::chrono::microseconds(it->second.min().get<int64_t>());
-		agc.maxFrameDuration =
-			std::chrono::microseconds(it->second.max().get<int64_t>());
-		if (defaultMaxFrameDuration_)
-			agc.maxFrameDuration = std::clamp(*defaultMaxFrameDuration_,
-							  agc.minFrameDuration,
-							  agc.maxFrameDuration);
+		const auto defaults =
+			it->second.def().get<Span<const int64_t, 2>>();
+		agc.minFrameDuration = std::chrono::microseconds(defaults.front());
+		agc.maxFrameDuration = std::chrono::microseconds(defaults.back());
 	} else {
 		agc.minFrameDuration = cfg.lineDuration *
 				       (cfg.frameHeight + cfg.vblankDef);
@@ -215,14 +222,24 @@ void Agc::queueRequest(IPAContext &context,
 		const auto it = context.ctrlMap.find(&controls::FrameDurationLimits);
 		if (it != context.ctrlMap.end()) {
 			const ControlInfo &limits = it->second;
-			int64_t minFrameDuration = std::clamp(
-				frameDurationLimits->front(),
-				limits.min().get<int64_t>(),
-				limits.max().get<int64_t>());
-			int64_t maxFrameDuration = std::clamp(
-				frameDurationLimits->back(),
-				limits.min().get<int64_t>(),
-				limits.max().get<int64_t>());
+			int64_t minFrameDuration;
+			int64_t maxFrameDuration;
+			if (frameDurationLimits->front() == 0 &&
+			    frameDurationLimits->back() == 0) {
+				const auto defaults =
+					limits.def().get<Span<const int64_t, 2>>();
+				minFrameDuration = defaults.front();
+				maxFrameDuration = defaults.back();
+			} else {
+				minFrameDuration = std::clamp(
+					frameDurationLimits->front(),
+					limits.min().get<int64_t>(),
+					limits.max().get<int64_t>());
+				maxFrameDuration = std::clamp(
+					frameDurationLimits->back(),
+					limits.min().get<int64_t>(),
+					limits.max().get<int64_t>());
+			}
 			if (maxFrameDuration < minFrameDuration)
 				maxFrameDuration = minFrameDuration;
 
