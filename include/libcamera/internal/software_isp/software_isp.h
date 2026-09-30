@@ -73,7 +73,7 @@ public:
 	void processStats(const uint32_t frame, const uint32_t bufferId,
 			  const ControlList &sensorControls);
 
-	int start();
+	int start(const ControlList &controls);
 	void stop();
 
 	void queueRequest(const uint32_t frame, const ControlList &controls);

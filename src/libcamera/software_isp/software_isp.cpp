@@ -373,11 +373,12 @@ int SoftwareIsp::queueBuffers(uint32_t frame, FrameBuffer *input,
 
 /**
  * \brief Starts the Software ISP streaming operation
+ * \param[in] controls The controls to apply before the first frame
  * \return 0 on success, any other value indicates an error
  */
-int SoftwareIsp::start()
+int SoftwareIsp::start(const ControlList &controls)
 {
-	int ret = ipa_->start();
+	int ret = ipa_->start(controls);
 	if (ret)
 		return ret;
 

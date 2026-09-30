@@ -29,6 +29,10 @@ struct IPASessionConfiguration {
 		int32_t exposureMin, exposureMax;
 		double againMin, againMax, again10, againMinStep;
 		utils::Duration lineDuration;
+		bool vblankSupported;
+		int32_t vblankMin, vblankMax, vblankDef;
+		int32_t exposureMargin;
+		uint32_t frameHeight;
 	} agc;
 	struct {
 		std::optional<uint8_t> level;
@@ -39,6 +43,7 @@ struct IPAActiveState {
 	struct {
 		int32_t exposure;
 		double again;
+		int32_t vblank;
 		int32_t manualExposure;
 		double manualGain;
 		float exposureValue;
@@ -46,6 +51,8 @@ struct IPAActiveState {
 		bool autoGain;
 		unsigned int stableFrames;
 		bool valid;
+		utils::Duration minFrameDuration;
+		utils::Duration maxFrameDuration;
 	} agc;
 
 	struct {
@@ -93,12 +100,19 @@ struct IPAFrameContext : public FrameContext {
 	struct {
 		int32_t exposure;
 		double gain;
+		int32_t vblank;
 		int32_t manualExposure;
 		double manualGain;
 		float exposureValue;
 		bool autoExposure;
 		bool autoGain;
 	} sensor;
+
+	struct {
+		utils::Duration minFrameDuration;
+		utils::Duration maxFrameDuration;
+		utils::Duration frameDuration;
+	} agc;
 
 	RGB<float> gains;
 	unsigned int colourTemperatureK;

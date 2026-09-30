@@ -8,6 +8,7 @@
 #include <chrono>
 #include <limits>
 #include <stdint.h>
+#include <string>
 #include <sys/mman.h>
 
 #include <linux/v4l2-controls.h>
@@ -61,7 +62,7 @@ public:
 		 bool *ccmEnabled) override;
 	int configure(const IPAConfigInfo &configInfo) override;
 
-	int start() override;
+	int start(const ControlList &controls) override;
 	void stop() override;
 
 	void queueRequest(const uint32_t frame, const ControlList &controls) override;
@@ -250,6 +251,30 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
 	int32_t againMax = gainInfo.max().get<int32_t>();
 	int32_t againDef = gainInfo.def().get<int32_t>();
 
+	auto &agc = context_.configuration.agc;
+	agc.frameHeight = context_.sensorInfo.outputSize.height;
+	agc.vblankSupported = false;
+	const auto vblankIt = sensorInfoMap_.find(V4L2_CID_VBLANK);
+	if (vblankIt != sensorInfoMap_.end()) {
+		const ControlInfo &vblankInfo = vblankIt->second;
+		agc.vblankMin = vblankInfo.min().get<int32_t>();
+		agc.vblankMax = vblankInfo.max().get<int32_t>();
+		agc.vblankDef = vblankInfo.def().get<int32_t>();
+		agc.exposureMargin = static_cast<int32_t>(agc.frameHeight) +
+				     agc.vblankDef - agc.exposureMax;
+		if (agc.exposureMargin >= 0 &&
+		    agc.vblankMax > agc.vblankMin) {
+			agc.vblankSupported = true;
+		} else {
+			LOG(IPASoft, Warning)
+				<< "Unusable vblank limits " << agc.vblankMin
+				<< "-" << agc.vblankMax << " (def "
+				<< agc.vblankDef << "), exposure max "
+				<< agc.exposureMax
+				<< ", frame duration control disabled";
+		}
+	}
+
 	if (camHelper_) {
 		context_.configuration.agc.againMin = camHelper_->gain(againMin);
 		context_.configuration.agc.againMax = camHelper_->gain(againMax);
@@ -286,13 +311,29 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
 		<< context_.configuration.agc.exposureMax
 		<< ", gain " << context_.configuration.agc.againMin << "-"
 		<< context_.configuration.agc.againMax
-		<< " (" << context_.configuration.agc.againMinStep << ")";
+		<< " (" << context_.configuration.agc.againMinStep << ")"
+		<< (agc.vblankSupported
+			    ? ", vblank " + std::to_string(agc.vblankMin) + "-" +
+				      std::to_string(agc.vblankMax) + " (def " +
+				      std::to_string(agc.vblankDef) +
+				      ", exposure margin " +
+				      std::to_string(agc.exposureMargin) + " lines)"
+			    : ", no vblank control");
 
 	return 0;
 }
 
-int IPASoftSimple::start()
+int IPASoftSimple::start(const ControlList &controls)
 {
+	/*
+	 * Apply the startup controls through the algorithms, as if they had
+	 * been queued with a request. The frame context is a throwaway, the
+	 * algorithms record what matters in the active state.
+	 */
+	IPAFrameContext frameContext{};
+	for (const auto &algo : algorithms())
+		algo->queueRequest(context_, 0, frameContext, controls);
+
 	return 0;
 }
 
@@ -331,6 +372,12 @@ void IPASoftSimple::processStats(const uint32_t frame,
 		sensorControls.get(V4L2_CID_EXPOSURE).get<int32_t>();
 	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
+	if (context_.configuration.agc.vblankSupported &&
+	    sensorControls.contains(V4L2_CID_VBLANK))
+		frameContext.sensor.vblank =
+			sensorControls.get(V4L2_CID_VBLANK).get<int32_t>();
+	else
+		frameContext.sensor.vblank = context_.configuration.agc.vblankDef;
 
 	ControlList metadata(controls::controls);
 	for (const auto &algo : algorithms())
@@ -357,6 +404,8 @@ void IPASoftSimple::processStats(const uint32_t frame,
 	ctrls.set(V4L2_CID_EXPOSURE, frameContext.sensor.exposure);
 	ctrls.set(V4L2_CID_ANALOGUE_GAIN,
 		  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(againNew) : againNew));
+	if (context_.configuration.agc.vblankSupported)
+		ctrls.set(V4L2_CID_VBLANK, frameContext.sensor.vblank);
 
 	setSensorControls.emit(ctrls);
 }

@@ -33,6 +33,13 @@ public:
 private:
 	void updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 			    double exposureMSV);
+	void updateVblank(const IPAContext &context,
+			  IPAFrameContext &frameContext) const;
+	void vblankRange(const IPAContext &context,
+			 const IPAFrameContext &frameContext,
+			 int32_t &vblankLo, int32_t &vblankHi) const;
+	int32_t exposureMaxForVblank(const IPAContext &context,
+				     int32_t vblank) const;
 };
 
 } /* namespace ipa::soft::algorithms */

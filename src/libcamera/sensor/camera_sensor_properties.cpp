@@ -509,7 +509,7 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
 			.sensorDelays = {
 				.exposureDelay = 2,
 				.gainDelay = 2,
-				.vblankDelay = 0,
+				.vblankDelay = 2,
 				.hblankDelay = 0,
 			},
 		} },
@@ -519,7 +519,7 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
 			.sensorDelays = {
 				.exposureDelay = 2,
 				.gainDelay = 2,
-				.vblankDelay = 0,
+				.vblankDelay = 2,
 				.hblankDelay = 0,
 			},
 		} },

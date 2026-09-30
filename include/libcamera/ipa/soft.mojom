@@ -19,7 +19,7 @@ interface IPASoftInterface {
 	     libcamera.IPACameraSensorInfo sensorInfo,
 	     libcamera.ControlInfoMap sensorControls)
 		=> (int32 ret, libcamera.ControlInfoMap ipaControls, bool ccmEnabled);
-	start() => (int32 ret);
+	start(libcamera.ControlList controls) => (int32 ret);
 	stop();
 	configure(IPAConfigInfo configInfo)
 		=> (int32 ret);

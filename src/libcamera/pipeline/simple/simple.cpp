@@ -630,6 +630,8 @@ SimpleCameraData::SimpleCameraData(SimplePipelineHandler *pipe,
 		{ V4L2_CID_ANALOGUE_GAIN, { delays.gainDelay, false } },
 		{ V4L2_CID_EXPOSURE, { delays.exposureDelay, false } },
 	};
+	if (sensor_->controls().count(V4L2_CID_VBLANK))
+		params[V4L2_CID_VBLANK] = { delays.vblankDelay, true };
 	delayedCtrls_ = std::make_unique<DelayedControls>(sensor_->device(), params);
 
 	LOG(SimplePipeline, Debug)
@@ -1660,6 +1662,12 @@ void SimpleCameraData::setSensorControls(const ControlList &sensorControls)
 	 */
 	if (!frameStartEmitter_) {
 		ControlList ctrls(sensorControls);
+		if (ctrls.contains(V4L2_CID_VBLANK)) {
+			ControlList vblank(sensor_->controls());
+			vblank.set(V4L2_CID_VBLANK,
+				   ctrls.get(V4L2_CID_VBLANK));
+			sensor_->setControls(&vblank);
+		}
 		sensor_->setControls(&ctrls);
 	}
 }
@@ -2233,7 +2241,7 @@ int SimplePipelineHandler::exportFrameBuffers(Camera *camera, Stream *stream,
 		return data->video_->exportBuffers(count, buffers);
 }
 
-int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlList *controls)
+int SimplePipelineHandler::start(Camera *camera, const ControlList *controls)
 {
 	SimpleCameraData *data = cameraData(camera);
 	V4L2VideoDevice *video = data->video_;
@@ -2294,7 +2302,7 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
 		if (data->converter_)
 			ret = data->converter_->start();
 		else if (data->swIsp_)
-			ret = data->swIsp_->start();
+			ret = data->swIsp_->start(controls ? *controls : ControlList());
 		else
 			ret = 0;
 
