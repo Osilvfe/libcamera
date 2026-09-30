@@ -33,6 +33,8 @@ struct IPASessionConfiguration {
 		int32_t vblankMin, vblankMax, vblankDef;
 		int32_t exposureMargin;
 		uint32_t frameHeight;
+		/* Digital gain applied by the ISP after sensor gain is exhausted. */
+		double dgainMax;
 	} agc;
 	struct {
 		std::optional<uint8_t> level;
@@ -44,6 +46,7 @@ struct IPAActiveState {
 		int32_t exposure;
 		double again;
 		int32_t vblank;
+		double dgain;
 		int32_t manualExposure;
 		double manualGain;
 		float exposureValue;
@@ -112,6 +115,7 @@ struct IPAFrameContext : public FrameContext {
 		utils::Duration minFrameDuration;
 		utils::Duration maxFrameDuration;
 		utils::Duration frameDuration;
+		double digitalGain;
 	} agc;
 
 	RGB<float> gains;

@@ -657,4 +657,5 @@ algorithms:
         lowLightEndMs: 120.0
         smoothing: 0.12
   - Agc:
+      maxFrameDuration: 100000
 ...
