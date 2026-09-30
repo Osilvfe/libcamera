@@ -10,6 +10,7 @@
 #include <array>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "algorithm.h"
@@ -45,6 +46,18 @@ private:
 		std::map<unsigned int, Table> tables;
 	};
 
+	struct CalibrationConfig {
+		std::string nvmem;
+		unsigned int flagOffset;
+		unsigned int dataOffset;
+		unsigned int checksumOffset;
+		double referenceExposureMs;
+		unsigned int referenceCt;
+		float maximum;
+		bool flipX;
+	};
+
+	bool applyCalibration(const CalibrationConfig &config);
 	void interpolateCct(const ExposureSet &set, unsigned int ct,
 			    Table *table) const;
 

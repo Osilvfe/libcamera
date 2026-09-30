@@ -21,6 +21,15 @@ algorithms:
   - LensShading:
       enabled: true
       smoothing: 0.15
+      calibration:
+        nvmem: sc1320cs-eeprom
+        flag-offset: 63
+        data-offset: 72
+        checksum-offset: 1840
+        reference-exposure-ms: 3.0
+        reference-ct: 5000
+        maximum: 1023
+        flip-x: true
       sets:
         - exposure-ms: 3.0
           tables:
