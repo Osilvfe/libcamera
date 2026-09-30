@@ -9,9 +9,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <numeric>
 #include <stdint.h>
+#include <string>
+#include <vector>
 
+#include <libcamera/base/file.h>
 #include <libcamera/base/log.h>
 
 #include <libcamera/control_ids.h>
@@ -33,6 +37,105 @@ constexpr unsigned int kDefaultColourTemperature = 5000;
 
 }
 
+bool Awb::loadCalibration(const std::string &nvmem,
+			  const std::vector<CalibrationRecord> &records)
+{
+	if (nvmem.empty() || nvmem.find('/') != std::string::npos || records.empty())
+		return false;
+
+	unsigned int readSize = 0;
+	for (const CalibrationRecord &record : records) {
+		if (!record.ct || record.flagOffset >= record.dataOffset ||
+		    record.checksumOffset <= record.dataOffset ||
+		    record.checksumOffset - record.dataOffset != 12 ||
+		    record.checksumOffset > 1024 * 1024)
+			return false;
+		readSize = std::max(readSize, record.checksumOffset + 1);
+	}
+
+	const std::string path = "/sys/bus/nvmem/devices/" + nvmem + "/nvmem";
+	File file(path);
+	if (!file.open(File::OpenModeFlag::ReadOnly)) {
+		LOG(IPASoftAwb, Warning)
+			<< "Unable to open " << path << ": " << file.error();
+		return false;
+	}
+
+	std::vector<uint8_t> data(readSize);
+	const ssize_t bytes = file.read({ data.data(), data.size() });
+	if (bytes != static_cast<ssize_t>(data.size())) {
+		LOG(IPASoftAwb, Warning)
+			<< "Short AWB calibration read from " << path << ": "
+			<< bytes << " of " << data.size() << " bytes";
+		return false;
+	}
+
+	std::map<unsigned int, Vector<double, 2>> gains;
+	for (const CalibrationRecord &record : records) {
+		unsigned int sum = data[record.flagOffset];
+		for (unsigned int offset = record.dataOffset;
+		     offset < record.checksumOffset; ++offset)
+			sum += data[offset];
+		const uint8_t expectedChecksum = sum % 255 + 1;
+		if (data[record.flagOffset] != 1 ||
+		    data[record.checksumOffset] != expectedChecksum) {
+			LOG(IPASoftAwb, Warning)
+				<< "Invalid " << record.ct << " K AWB calibration for "
+				<< nvmem;
+			return false;
+		}
+
+		auto readLe16 = [&data](unsigned int offset) {
+			return data[offset] | data[offset + 1] << 8;
+		};
+		const unsigned int unitR = readLe16(record.dataOffset);
+		const unsigned int unitB = readLe16(record.dataOffset + 2);
+		const unsigned int goldenR = readLe16(record.dataOffset + 6);
+		const unsigned int goldenB = readLe16(record.dataOffset + 8);
+		if (!unitR || !unitB || !goldenR || !goldenB)
+			return false;
+
+		const Vector<double, 2> factor{ {
+			static_cast<double>(goldenR) / unitR,
+			static_cast<double>(goldenB) / unitB,
+		} };
+		if (factor[0] < 0.5 || factor[0] > 2.0 ||
+		    factor[1] < 0.5 || factor[1] > 2.0)
+			return false;
+		if (!gains.emplace(record.ct, factor).second)
+			return false;
+	}
+
+	calibrationGains_.setData(std::move(gains));
+	calibrated_ = true;
+	const auto &points = calibrationGains_.data();
+	LOG(IPASoftAwb, Info)
+		<< "Applied " << nvmem << " AWB calibration at "
+		<< points.begin()->first << ".." << points.rbegin()->first << " K";
+	return true;
+}
+
+Vector<double, 2> Awb::calibrationGains(unsigned int temperatureK)
+{
+	if (!calibrated_)
+		return Vector<double, 2>{ { 1.0, 1.0 } };
+	return calibrationGains_.getInterpolated(temperatureK);
+}
+
+unsigned int Awb::estimateTemperature(const RGB<double> &rgb)
+{
+	if (!calibrated_)
+		return estimateCCT(rgb);
+
+	/* Map this module's measured ratios to the golden module for CCT lookup. */
+	const Vector<double, 2> calibration =
+		calibrationGains(estimateCCT(rgb));
+	const RGB<double> corrected{ {
+		rgb.r() * calibration[0], 1.0, rgb.b() * calibration[1],
+	} };
+	return estimateCCT(corrected);
+}
+
 int Awb::init(IPAContext &context, const ValueNode &tuningData)
 {
 	int ret = colourGains_.readYaml(tuningData["colourGains"], "ct", "gains");
@@ -44,6 +147,35 @@ int Awb::init(IPAContext &context, const ValueNode &tuningData)
 	smoothing_ = tuningData["smoothing"].get<float>(0.18f);
 	if (smoothing_ <= 0.0f || smoothing_ > 1.0f)
 		return -EINVAL;
+
+	const ValueNode &calibration = tuningData["calibration"];
+	if (calibration) {
+		auto nvmem = calibration["nvmem"].get<std::string>();
+		const ValueNode &recordsNode = calibration["records"];
+		if (!nvmem || !recordsNode.isList()) {
+			LOG(IPASoftAwb, Error)
+				<< "Incomplete AWB calibration configuration";
+			return -EINVAL;
+		}
+
+		std::vector<CalibrationRecord> records;
+		for (const ValueNode &node : recordsNode.asList()) {
+			auto ct = node["ct"].get<uint32_t>();
+			auto flagOffset = node["flag-offset"].get<uint32_t>();
+			auto dataOffset = node["data-offset"].get<uint32_t>();
+			auto checksumOffset = node["checksum-offset"].get<uint32_t>();
+			if (!ct || !flagOffset || !dataOffset || !checksumOffset) {
+				LOG(IPASoftAwb, Error)
+					<< "Incomplete AWB calibration record";
+				return -EINVAL;
+			}
+			records.push_back({ *ct, *flagOffset, *dataOffset,
+					    *checksumOffset });
+		}
+		if (!loadCalibration(*nvmem, records))
+			LOG(IPASoftAwb, Warning)
+				<< "Using generic AWB tuning for " << *nvmem;
+	}
 
 	auto &cmap = context.ctrlMap;
 	cmap[&controls::AwbEnable] = ControlInfo(false, true, true);
@@ -88,8 +220,10 @@ std::optional<RGB<float>> Awb::gainsFromTemperature(unsigned int temperatureK)
 {
 	const Vector<double, 2> gains = colourGains_.getInterpolated(
 		std::clamp(temperatureK, kMinColourTemperature, kMaxColourTemperature));
-	return RGB<float>{ { static_cast<float>(gains[0]), 1.0f,
-			    static_cast<float>(gains[1]) } };
+	/* Temperature presets are open-loop and need the module correction. */
+	const Vector<double, 2> calibration = calibrationGains(temperatureK);
+	return RGB<float>{ { static_cast<float>(gains[0] * calibration[0]), 1.0f,
+			    static_cast<float>(gains[1] * calibration[1]) } };
 }
 
 unsigned int Awb::modeTemperature(int32_t mode) const
@@ -149,7 +283,7 @@ void Awb::queueRequest(IPAContext &context,
 				1.0 / awb.manualGains.b(),
 			} };
 			awb.manualTemperatureK = std::clamp<unsigned int>(
-				estimateCCT(inverse), kMinColourTemperature,
+				estimateTemperature(inverse), kMinColourTemperature,
 				kMaxColourTemperature);
 		}
 
@@ -256,7 +390,7 @@ void Awb::process(IPAContext &context,
 	context.activeState.awb.locked = context.activeState.awb.stableFrames >= 3;
 
 	RGB<double> rgbGains{ { 1 / gains.r(), 1 / gains.g(), 1 / gains.b() } };
-	context.activeState.awb.temperatureK = estimateCCT(rgbGains);
+	context.activeState.awb.temperatureK = estimateTemperature(rgbGains);
 
 	LOG(IPASoftAwb, Debug)
 		<< "target R/B: " << target << "; filtered: " << gains

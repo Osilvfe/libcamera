@@ -9,6 +9,9 @@
 
 #include "libcamera/internal/vector.h"
 
+#include <string>
+#include <vector>
+
 #include <libipa/interpolator.h>
 
 #include "algorithm.h"
@@ -40,10 +43,23 @@ public:
 		     ControlList &metadata) override;
 
 private:
+	struct CalibrationRecord {
+		unsigned int ct;
+		unsigned int flagOffset;
+		unsigned int dataOffset;
+		unsigned int checksumOffset;
+	};
+
+	bool loadCalibration(const std::string &nvmem,
+			     const std::vector<CalibrationRecord> &records);
+	Vector<double, 2> calibrationGains(unsigned int temperatureK);
+	unsigned int estimateTemperature(const RGB<double> &rgb);
 	std::optional<RGB<float>> gainsFromTemperature(unsigned int temperatureK);
 	unsigned int modeTemperature(int32_t mode) const;
 
 	Interpolator<Vector<double, 2>> colourGains_;
+	Interpolator<Vector<double, 2>> calibrationGains_;
+	bool calibrated_ = false;
 	float smoothing_ = 0.18f;
 };
 

@@ -7,6 +7,17 @@ algorithms:
       blackLevel: 4096
   - Awb:
       smoothing: 0.18
+      calibration:
+        nvmem: sc820cs-otp
+        records:
+          - ct: 1850
+            flag-offset: 49
+            data-offset: 50
+            checksum-offset: 62
+          - ct: 5000
+            flag-offset: 35
+            data-offset: 36
+            checksum-offset: 48
       colourGains:
         - ct: 2800
           gains: [ 1.00, 2.20 ]

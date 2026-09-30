@@ -7,6 +7,13 @@ algorithms:
       blackLevel: 4096
   - Awb:
       smoothing: 0.18
+      calibration:
+        nvmem: sc1320cs-eeprom
+        records:
+          - ct: 5000
+            flag-offset: 35
+            data-offset: 36
+            checksum-offset: 48
       colourGains:
         - ct: 2800
           gains: [ 1.45, 3.20 ]
