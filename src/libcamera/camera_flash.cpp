@@ -20,7 +20,7 @@ namespace libcamera {
 LOG_DEFINE_CATEGORY(CameraFlash)
 
 CameraFlash::CameraFlash(const MediaEntity *entity)
-	: entity_(entity)
+	: entity_(entity), strobeRequested_(false)
 {
 }
 
@@ -123,7 +123,11 @@ int CameraFlash::prepareFlash(int32_t intensity, int32_t timeout)
 
 int CameraFlash::strobe()
 {
-	return setControl(V4L2_CID_FLASH_STROBE, 1);
+	int ret = setControl(V4L2_CID_FLASH_STROBE, 1);
+	if (!ret)
+		strobeRequested_ = true;
+
+	return ret;
 }
 
 int CameraFlash::stop()
@@ -132,8 +136,9 @@ int CameraFlash::stop()
 	int32_t fault;
 	int statusRet = status(&strobing, &fault);
 
-	if (statusRet || strobing)
+	if (strobeRequested_ && (statusRet || strobing))
 		setControl(V4L2_CID_FLASH_STROBE_STOP, 1);
+	strobeRequested_ = false;
 
 	/* LED_MODE_NONE is sufficient when no strobe is currently active. */
 	return setMode(V4L2_FLASH_LED_MODE_NONE);

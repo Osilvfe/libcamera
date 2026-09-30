@@ -298,7 +298,9 @@ public:
 	int handleFocusControls(Request *request);
 	void updateAutoFocus(Request *request, const ControlList &metadata);
 	int handleFlashControls(Request *request);
+	int queueSingleFlash(Request *request);
 	int triggerSingleFlash(Request *request);
+	void frameStart(uint32_t sequence);
 	void stopFlashes();
 	void writeFlashMetadata(Request *request);
 
@@ -357,6 +359,7 @@ public:
 	int32_t focusMaximum_;
 	V4L2VideoDevice *video_;
 	V4L2Subdevice *frameStartEmitter_;
+	uint32_t frameStartSequence_ = 0;
 
 	std::vector<Configuration> configs_;
 	std::map<PixelFormat, std::vector<const Configuration *>> formats_;
@@ -405,6 +408,7 @@ private:
 	int32_t torchIntensity_;
 	int32_t flashTimeout_;
 	bool singleFlashArmed_;
+	std::map<uint32_t, Request *> pendingSingleFlashes_;
 
 	void tryPipeline(unsigned int code, const Size &size);
 	static std::vector<const MediaPad *> routedSourcePads(MediaPad *sink);
@@ -1003,6 +1007,7 @@ void SimpleCameraData::stopFlashes()
 
 	flashMode_ = controls::draft::FlashModeOff;
 	singleFlashArmed_ = false;
+	pendingSingleFlashes_.clear();
 }
 
 int SimpleCameraData::handleFlashControls(Request *request)
@@ -1081,12 +1086,36 @@ int SimpleCameraData::handleFlashControls(Request *request)
 	return 0;
 }
 
-int SimpleCameraData::triggerSingleFlash(Request *request)
+int SimpleCameraData::queueSingleFlash(Request *request)
 {
 	const auto &mode = request->_d()->metadata().get(controls::draft::FlashMode);
 	if (!mode || *mode != controls::draft::FlashModeSingle)
 		return 0;
 
+	/* Single is edge-triggered and must not carry over to another request. */
+	flashMode_ = controls::draft::FlashModeOff;
+
+	if (!frameStartEmitter_)
+		return triggerSingleFlash(request);
+
+	/* There is no preceding frame start for the first request. */
+	if (!request->sequence())
+		return triggerSingleFlash(request);
+
+	/*
+	 * The CSI-2 sequence counts sensor frames, including frames dropped while
+	 * the software ISP has no input buffer. Track the request itself and use
+	 * the conversion queue to identify the preceding captured frame instead.
+	 */
+	LOG(SimplePipeline, Debug)
+		<< "Queueing single flash for request " << request->sequence();
+	auto [it, inserted] = pendingSingleFlashes_.try_emplace(request->sequence(),
+								 request);
+	return inserted ? 0 : -EEXIST;
+}
+
+int SimpleCameraData::triggerSingleFlash(Request *request)
+{
 	for (CameraFlash *flash : flashes_) {
 		int ret = flash->strobe();
 		if (ret) {
@@ -1097,10 +1126,47 @@ int SimpleCameraData::triggerSingleFlash(Request *request)
 		}
 	}
 
-	/* Single is edge-triggered and must not carry over to another request. */
-	flashMode_ = controls::draft::FlashModeOff;
+	LOG(SimplePipeline, Debug)
+		<< "Triggered single flash for request " << request->sequence();
 	singleFlashArmed_ = true;
 	return 0;
+}
+
+void SimpleCameraData::frameStart(uint32_t hardwareSequence)
+{
+	const uint32_t sequence = frameStartSequence_++;
+	delayedCtrls_->applyControls(sequence);
+	LOG(SimplePipeline, Debug)
+		<< "Frame start " << sequence
+		<< " (hardware sequence " << hardwareSequence << ')';
+
+	uint32_t targetSequence;
+	if (useConversion_) {
+		if (conversionQueue_.empty())
+			return;
+
+		const uint32_t headSequence =
+			conversionQueue_.front().request->sequence();
+		LOG(SimplePipeline, Debug)
+				<< "Conversion queue head request "
+				<< headSequence;
+		targetSequence = headSequence + 1;
+	} else {
+		targetSequence = sequence + 1;
+	}
+
+	auto flash = pendingSingleFlashes_.find(targetSequence);
+	if (flash == pendingSingleFlashes_.end())
+		return;
+
+	Request *request = flash->second;
+	pendingSingleFlashes_.erase(flash);
+
+	int ret = triggerSingleFlash(request);
+	if (ret < 0)
+		LOG(SimplePipeline, Error)
+			<< "Failed to trigger single flash for request "
+			<< request->sequence();
 }
 
 void SimpleCameraData::writeFlashMetadata(Request *request)
@@ -2151,14 +2217,15 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
 	video->bufferReady.connect(data, &SimpleCameraData::imageBufferReady);
 
 	data->delayedCtrls_->reset();
+	data->frameStartSequence_ = 0;
 	if (frameStartEmitter) {
 		ret = frameStartEmitter->setFrameStartEnabled(true);
 		if (ret) {
 			stop(camera);
 			return ret;
 		}
-		frameStartEmitter->frameStart.connect(data->delayedCtrls_.get(),
-						      &DelayedControls::applyControls);
+		frameStartEmitter->frameStart.connect(data,
+						      &SimpleCameraData::frameStart);
 	}
 
 	ret = video->streamOn();
@@ -2199,8 +2266,8 @@ void SimplePipelineHandler::stopDevice(Camera *camera)
 
 	if (frameStartEmitter) {
 		frameStartEmitter->setFrameStartEnabled(false);
-		frameStartEmitter->frameStart.disconnect(data->delayedCtrls_.get(),
-							 &DelayedControls::applyControls);
+		frameStartEmitter->frameStart.disconnect(data,
+							 &SimpleCameraData::frameStart);
 	}
 
 	if (data->useConversion_) {
@@ -2263,10 +2330,10 @@ int SimplePipelineHandler::queueRequestDevice(Camera *camera, Request *request)
 			data->swIsp_->queueRequest(request->sequence(), request->controls());
 	}
 
-	ret = data->triggerSingleFlash(request);
+	ret = data->queueSingleFlash(request);
 	if (ret < 0)
 		LOG(SimplePipeline, Error)
-			<< "Failed to trigger single flash for request "
+			<< "Failed to queue single flash for request "
 			<< request->sequence();
 
 	return 0;

@@ -51,6 +51,7 @@ private:
 	const MediaEntity *entity_;
 	std::unique_ptr<V4L2Subdevice> subdev_;
 	std::string model_;
+	bool strobeRequested_;
 };
 
 } /* namespace libcamera */
